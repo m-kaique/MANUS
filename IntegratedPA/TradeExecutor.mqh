@@ -9,7 +9,7 @@
 #property strict
 
 // Inclusão de bibliotecas necessárias
-#include <Trade\Trade.mqh>
+#include <Trade/Trade.mqh>
 #include "Structures.mqh"
 #include "Logger.mqh"
 

@@ -11,6 +11,7 @@
 #include "Utils.mqh"
 #include "Logger.mqh"
 #include "MarketContext.mqh"
+#include "SetupClassifier.mqh"
 
 // Strategies
 #include "strategies/SpikeAndChannel.mqh"
@@ -389,11 +390,11 @@ Signal CSignalEngine::GenerateReversalSignals(string symbol, ENUM_TIMEFRAMES tim
 //+------------------------------------------------------------------+
 SETUP_QUALITY CSignalEngine::ClassifySetupQuality(string symbol, Signal &signal)
 {
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return SETUP_INVALID;
-   }
+   // // Verificar se os dados são válidos
+   // if (!m_hasValidData)
+   // {
+   //    return SETUP_INVALID;
+   // }
 
    // Verificar se o sinal é válido
    if (signal.id <= 0)
@@ -405,18 +406,22 @@ SETUP_QUALITY CSignalEngine::ClassifySetupQuality(string symbol, Signal &signal)
    // Classificar com base na força do sinal e na relação risco/retorno
    if (signalStrength >= 0.8 && signal.riskRewardRatio >= 3.0)
    {
+      Print("SETUP_A_PLUS");
       return SETUP_A_PLUS;
    }
    else if (signalStrength >= 0.6 && signal.riskRewardRatio >= 2.0)
    {
+      Print("SETUP_A");
       return SETUP_A;
    }
    else if (signalStrength >= 0.4 && signal.riskRewardRatio >= 1.5)
    {
+      Print("SETUP_B");
       return SETUP_B;
    }
    else
    {
+      Print("SETUP_MALDITO_C");
       return SETUP_C;
    }
 }
@@ -426,11 +431,11 @@ SETUP_QUALITY CSignalEngine::ClassifySetupQuality(string symbol, Signal &signal)
 //+------------------------------------------------------------------+
 bool CSignalEngine::IsValidSignal(Signal &signal)
 {
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return false;
-   }
+   // // Verificar se os dados são válidos
+   // if (!m_hasValidData)
+   // {
+   //    return false;
+   // }
 
    // Verificar se o sinal tem ID válido
    if (signal.id <= 0)
@@ -509,10 +514,10 @@ bool CSignalEngine::HasConfirmation(string symbol, ENUM_TIMEFRAMES timeframe, in
 double CSignalEngine::CalculateSignalStrength(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal)
 {
    // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return 0.0;
-   }
+   // if (!m_hasValidData)
+   // {
+   //    return 0.0;
+   // }
 
    // Implementação básica - será expandida posteriormente
 

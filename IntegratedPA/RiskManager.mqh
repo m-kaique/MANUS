@@ -400,19 +400,19 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    // Ajustar risco com base na qualidade do setup
    switch(signal.quality) {
       case SETUP_A_PLUS:
-         riskPercentage *= 1.2; // 20% a mais para setups A+
+         riskPercentage *= 1.5; // 50% a mais para setups A+
          break;
       case SETUP_A:
-         riskPercentage *= 1.0; // Risco normal para setups A
+         riskPercentage *= 1.2; // 20% a mais para setups A
          break;
       case SETUP_B:
-         riskPercentage *= 0.8; // 20% a menos para setups B
+         riskPercentage *= 1.0; // Risco normal para setups B
          break;
       case SETUP_C:
          riskPercentage *= 0.5; // 50% a menos para setups C
          break;
       default:
-         riskPercentage *= 0.5; // Risco mínimo para outros casos
+         riskPercentage *= 0.3; // Risco mínimo para outros casos
    }
    
    // Ajustar risco com base na fase de mercado

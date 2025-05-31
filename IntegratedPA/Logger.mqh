@@ -50,6 +50,8 @@ public:
    void LogTrade(int ticket, string action, double price, double volume);
    void LogPosition(int ticket, double profit, double drawdown);
    void LogPerformance(int totalTrades, int winTrades, double profitFactor);
+   void LogSetupClassification(string symbol, SETUP_QUALITY quality, int factors, double riskReward);
+   void LogSpreadWarning(string symbol, double currentSpread, double avgSpread, double multiple);
    
    // Métodos para exportação
    bool ExportToCSV(string fileName, string headers, string data);
