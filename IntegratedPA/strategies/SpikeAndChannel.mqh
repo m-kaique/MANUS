@@ -352,7 +352,7 @@ bool CSpikeAndChannel::DetectSpikePhase(string symbol, ENUM_TIMEFRAMES timeframe
 }
 
 //+------------------------------------------------------------------+
-//| Detecta a fase de Canal                                          |
+//| Detecta a fase de Canal - VERSÃO CORRIGIDA                       |
 //+------------------------------------------------------------------+
 bool CSpikeAndChannel::DetectChannelPhase(string symbol, ENUM_TIMEFRAMES timeframe, int spikeStartBar, int spikeEndBar, bool isUptrend, int &channelEndBar, double &trendLineSlope, double &trendLineValues[]) {
    // O canal começa onde o spike termina
@@ -369,31 +369,40 @@ bool CSpikeAndChannel::DetectChannelPhase(string symbol, ENUM_TIMEFRAMES timefra
    }
    double spikeHeight = spikeHigh - spikeLow;
    
-   // Procurar pelo fim do canal
+   // Procurar pelo fim do canal (limitar a um máximo razoável)
+   int maxChannelBars = 30; // Máximo de 30 barras para o canal
    int pullbackCount = 0;
    int consecutiveCounter = 0;
-   channelEndBar = 0; // Padrão: até a barra atual
+   channelEndBar = MathMax(0, channelStartBar - maxChannelBars); // Padrão: máximo de 30 barras
    
-   // Calcular linha de tendência inicial
-   if(!CalculateTrendLine(symbol, timeframe, channelStartBar, channelStartBar - 5, isUptrend, trendLineSlope, trendLineValues)) {
+   // Calcular linha de tendência inicial com tamanho fixo
+   int initialChannelSize = MathMin(10, channelStartBar + 1); // Máximo 10 barras ou até barra 0
+   if(!CalculateTrendLine(symbol, timeframe, channelStartBar, MathMax(0, channelStartBar - initialChannelSize + 1), isUptrend, trendLineSlope, trendLineValues)) {
       return false;
    }
    
+   // *** CORREÇÃO PRINCIPAL: Calcular índice corretamente ***
+   // O array trendLineValues tem índices de 0 até (channelStartBar - channelEndUsedForTrendLine)
+   int trendLineStartBar = channelStartBar;
+   int trendLineEndBar = MathMax(0, channelStartBar - initialChannelSize + 1);
+   int arraySize = ArraySize(trendLineValues);
+   
    // Analisar as barras após o spike
-   for(int i = channelStartBar - 1; i >= 0; i--) {
-      // Verificar se a barra respeita a linha de tendência
-      int index = channelStartBar - i;
+   for(int i = channelStartBar - 1; i >= MathMax(0, channelStartBar - maxChannelBars); i--) {
       
-      // Proteção contra acesso fora do array
-      if(index >= ArraySize(trendLineValues)) {
+      // *** CORREÇÃO: Calcular índice baseado na posição relativa na linha de tendência ***
+      int relativeIndex = trendLineStartBar - i;
+      
+      // *** PROTEÇÃO ROBUSTA: Verificar se o índice está dentro dos limites ***
+      if(relativeIndex < 0 || relativeIndex >= arraySize) {
          if(m_logger != NULL) {
-            m_logger.Warning(StringFormat("SpikeAndChannel: Índice %d fora dos limites do array trendLineValues (tamanho: %d)", 
-                                       index, ArraySize(trendLineValues)));
+            m_logger.Debug(StringFormat("SpikeAndChannel: Índice %d fora dos limites válidos (0-%d) para barra %d", 
+                                       relativeIndex, arraySize-1, i));
          }
-         continue;
+         continue; // Pular esta barra
       }
       
-      double trendLineValue = trendLineValues[index];
+      double trendLineValue = trendLineValues[relativeIndex];
       
       if(isUptrend) {
          // Em tendência de alta, verificar se o preço respeita o suporte
@@ -438,22 +447,6 @@ bool CSpikeAndChannel::DetectChannelPhase(string symbol, ENUM_TIMEFRAMES timefra
             consecutiveCounter = 0;
          }
       }
-      
-      // Se chegamos muito longe, limitar o tamanho do canal
-      if(channelStartBar - i > 30) {
-         channelEndBar = i;
-         break;
-      }
-   }
-   
-   // Se não encontramos um fim claro, usar a barra atual
-   if(channelEndBar == 0) {
-      channelEndBar = 0;
-   }
-   
-   // Recalcular a linha de tendência com o canal completo
-   if(!CalculateTrendLine(symbol, timeframe, channelStartBar, channelEndBar, isUptrend, trendLineSlope, trendLineValues)) {
-      return false;
    }
    
    // Verificar se o canal é longo o suficiente
@@ -465,15 +458,22 @@ bool CSpikeAndChannel::DetectChannelPhase(string symbol, ENUM_TIMEFRAMES timefra
       return false;
    }
    
+   // *** RECALCULAR linha de tendência com o canal final completo ***
+   if(!CalculateTrendLine(symbol, timeframe, channelStartBar, channelEndBar, isUptrend, trendLineSlope, trendLineValues)) {
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("SpikeAndChannel: Falha ao recalcular linha de tendência para canal final de %s", symbol));
+      }
+      return false;
+   }
+   
    if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("SpikeAndChannel: Canal detectado para %s - %s, Barras: %d, Índices: %d-%d", 
+      m_logger.Debug(StringFormat("SpikeAndChannel: Canal detectado para %s - %s, Barras: %d, Índices: %d-%d, Array size: %d", 
                                 symbol, isUptrend ? "Alta" : "Baixa", 
-                                channelStartBar - channelEndBar, channelStartBar, channelEndBar));
+                                channelStartBar - channelEndBar, channelStartBar, channelEndBar, ArraySize(trendLineValues)));
    }
    
    return true;
 }
-
 //+------------------------------------------------------------------+
 //| Calcula a linha de tendência                                     |
 //+------------------------------------------------------------------+
@@ -778,11 +778,9 @@ bool CSpikeAndChannel::DetectFechamentoForte(string symbol, ENUM_TIMEFRAMES time
 }
 
 //+------------------------------------------------------------------+
-//| Detecta entrada em pullback para linha de tendência              |
+//| Detecta entrada em pullback para linha de tendência - CORRIGIDO  |
 //+------------------------------------------------------------------+
 bool CSpikeAndChannel::DetectPullbackLinhaTendencia(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, int &entryBar, double &entryPrice, double &stopLoss) {
-   // Esta entrada é mais comum durante a fase de canal
-   
    // Verificar se temos valores de linha de tendência
    if(ArraySize(pattern.trendLineValues) == 0) {
       if(m_logger != NULL) {
@@ -791,20 +789,24 @@ bool CSpikeAndChannel::DetectPullbackLinhaTendencia(string symbol, ENUM_TIMEFRAM
       return false;
    }
    
+   int arraySize = ArraySize(pattern.trendLineValues);
+   
    // Procurar por pullback que teste a linha de tendência
    for(int i = pattern.channelStartBar - 1; i >= MathMax(pattern.channelEndBar, 0); i--) {
-      int index = pattern.channelStartBar - i;
       
-      // Proteção contra acesso fora do array
-      if(index >= ArraySize(pattern.trendLineValues)) {
+      // *** CORREÇÃO: Calcular índice relativo baseado no início do canal ***
+      int relativeIndex = pattern.channelStartBar - i;
+      
+      // *** PROTEÇÃO: Verificar limites do array ***
+      if(relativeIndex < 0 || relativeIndex >= arraySize) {
          if(m_logger != NULL) {
-            m_logger.Warning(StringFormat("SpikeAndChannel: Índice %d fora dos limites do array em DetectPullbackLinhaTendencia (tamanho: %d)", 
-                                       index, ArraySize(pattern.trendLineValues)));
+            m_logger.Debug(StringFormat("SpikeAndChannel: Índice %d fora dos limites em DetectPullbackLinhaTendencia (array size: %d)", 
+                                       relativeIndex, arraySize));
          }
          continue;
       }
       
-      double trendLineValue = pattern.trendLineValues[index];
+      double trendLineValue = pattern.trendLineValues[relativeIndex];
       bool isTouchingTrendLine = false;
       
       if(pattern.isUptrend) {
@@ -865,13 +867,13 @@ bool CSpikeAndChannel::DetectPullbackLinhaTendencia(string symbol, ENUM_TIMEFRAM
    
    return false;
 }
-
 //+------------------------------------------------------------------+
 //| Detecta entrada em falha de pullback                             |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Detecta entrada em falha de pullback - CORRIGIDO                 |
+//+------------------------------------------------------------------+
 bool CSpikeAndChannel::DetectFalhaPullback(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, int &entryBar, double &entryPrice, double &stopLoss) {
-   // Esta entrada é mais comum durante a fase de canal
-   
    // Verificar se temos valores de linha de tendência
    if(ArraySize(pattern.trendLineValues) == 0) {
       if(m_logger != NULL) {
@@ -880,20 +882,24 @@ bool CSpikeAndChannel::DetectFalhaPullback(string symbol, ENUM_TIMEFRAMES timefr
       return false;
    }
    
+   int arraySize = ArraySize(pattern.trendLineValues);
+   
    // Procurar por pullback que falha em atingir a linha de tendência
    for(int i = pattern.channelStartBar - 3; i >= MathMax(pattern.channelEndBar, 0); i--) {
-      int index = pattern.channelStartBar - i;
       
-      // Proteção contra acesso fora do array
-      if(index >= ArraySize(pattern.trendLineValues)) {
+      // *** CORREÇÃO: Calcular índice relativo baseado no início do canal ***
+      int relativeIndex = pattern.channelStartBar - i;
+      
+      // *** PROTEÇÃO: Verificar limites do array ***
+      if(relativeIndex < 0 || relativeIndex >= arraySize) {
          if(m_logger != NULL) {
-            m_logger.Warning(StringFormat("SpikeAndChannel: Índice %d fora dos limites do array em DetectFalhaPullback (tamanho: %d)", 
-                                       index, ArraySize(pattern.trendLineValues)));
+            m_logger.Debug(StringFormat("SpikeAndChannel: Índice %d fora dos limites em DetectFalhaPullback (array size: %d)", 
+                                       relativeIndex, arraySize));
          }
          continue;
       }
       
-      double trendLineValue = pattern.trendLineValues[index];
+      double trendLineValue = pattern.trendLineValues[relativeIndex];
       bool isFailedPullback = false;
       int pullbackBar = -1;
       
@@ -961,7 +967,6 @@ bool CSpikeAndChannel::DetectFalhaPullback(string symbol, ENUM_TIMEFRAMES timefr
    
    return false;
 }
-
 //+------------------------------------------------------------------+
 //| Gera sinal com base no padrão detectado                          |
 //+------------------------------------------------------------------+

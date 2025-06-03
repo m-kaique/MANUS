@@ -27,7 +27,7 @@ struct ValidationCache
    datetime lastValidation;
    bool isValid;
    int validityPeriodSeconds;
-   
+
    ValidationCache()
    {
       symbol = "";
@@ -36,12 +36,12 @@ struct ValidationCache
       isValid = false;
       validityPeriodSeconds = 300; // 5 minutos
    }
-   
+
    bool IsExpired()
    {
       return (TimeCurrent() - lastValidation) > validityPeriodSeconds;
    }
-   
+
    void Update(string sym, ENUM_TIMEFRAMES tf, bool valid)
    {
       symbol = sym;
@@ -49,7 +49,7 @@ struct ValidationCache
       isValid = valid;
       lastValidation = TimeCurrent();
    }
-   
+
    bool Matches(string sym, ENUM_TIMEFRAMES tf)
    {
       return (symbol == sym && timeframe == tf);
@@ -63,25 +63,25 @@ class CIndicatorHandle
 {
 private:
    int m_handle;
-   
+
 public:
    CIndicatorHandle() : m_handle(INVALID_HANDLE) {}
-   
+
    ~CIndicatorHandle()
    {
       Release();
    }
-   
+
    void SetHandle(int handle)
    {
       Release(); // Libera handle anterior se existir
       m_handle = handle;
    }
-   
+
    int GetHandle() const { return m_handle; }
-   
+
    bool IsValid() const { return m_handle != INVALID_HANDLE; }
-   
+
    void Release()
    {
       if (m_handle != INVALID_HANDLE)
@@ -98,22 +98,53 @@ public:
 class CSignalEngine
 {
 private:
-   CLogger *m_logger;               
+   CLogger *m_logger;
    CMarketContext *m_marketContext;
-   CSetupClassifier* m_setupClassifier;
+   CSetupClassifier *m_setupClassifier;
+   // CACHE SPIKE AND CHANNEL
+   CSpikeAndChannel *m_spikeAndChannelCache;
+   // Cache de validação por símbolo/timeframe
+   struct SymbolValidationCache
+   {
+      string symbol;
+      ENUM_TIMEFRAMES timeframe;
+      datetime lastValidation;
+      bool isValid;
+      int validitySeconds;
+   };
+   SymbolValidationCache m_symbolCache[];
 
+   // Cooldown para evitar sinais repetitivos
+   struct SignalCooldown
+   {
+      string symbol;
+      string strategy;
+      datetime lastSignalTime;
+      int cooldownSeconds;
+   };
+   SignalCooldown m_signalCooldowns[];
+
+   // Métodos para gerenciamento de cache
+   bool IsInCooldown(string symbol, string strategy);
+   void AddToCooldown(string symbol, string strategy, int cooldownSeconds = 180);
+   bool GetCachedValidation(string symbol, ENUM_TIMEFRAMES timeframe);
+   void SetCachedValidation(string symbol, ENUM_TIMEFRAMES timeframe, bool isValid);
+
+   //------------------------------------------------------------------------------------
    // Configurações
-   int m_lookbackBars;     
-   double m_minRiskReward; 
-   
+   int m_lookbackBars;
+   double m_minRiskReward;
+
    // Cache de validação
    ValidationCache m_validationCache;
-   
+
    // Métodos privados auxiliares
    bool IsValidSignal(Signal &signal);
    bool HasConfirmation(string symbol, ENUM_TIMEFRAMES timeframe, int signalType);
    double CalculateSignalStrength(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal);
    bool CheckDataValidity(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod = "");
+   bool CheckIndicatorReady(int handle, string symbol, string context);
+   int SafeCopyBuffer(int handle, int bufferIndex, int start, int count, double &buffer[], string symbol, string context);
    bool PerformFullValidation(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
    ENUM_TIMEFRAMES NormalizeTimeframe(ENUM_TIMEFRAMES timeframe);
    bool ValidateBasicParameters(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
@@ -176,6 +207,9 @@ CSignalEngine::CSignalEngine()
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_validationCache = ValidationCache();
+   m_spikeAndChannelCache = NULL;
+   ArrayResize(m_symbolCache, 0);
+   ArrayResize(m_signalCooldowns, 0);
 }
 
 //+------------------------------------------------------------------+
@@ -197,9 +231,16 @@ CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext)
 CSignalEngine::~CSignalEngine()
 {
    // Liberar SetupClassifier
-   if (m_setupClassifier != NULL) {
+   if (m_setupClassifier != NULL)
+   {
       delete m_setupClassifier;
       m_setupClassifier = NULL;
+   }
+
+   if (m_spikeAndChannelCache != NULL)
+   {
+      delete m_spikeAndChannelCache;
+      m_spikeAndChannelCache = NULL;
    }
    // Não liberamos m_logger e m_marketContext aqui pois são apenas referências
 }
@@ -222,23 +263,26 @@ bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext)
    m_marketContext = marketContext;
 
    // ADICIONAR: Criar e inicializar SetupClassifier
-   if (m_setupClassifier != NULL) {
+   if (m_setupClassifier != NULL)
+   {
       delete m_setupClassifier;
    }
 
-    m_setupClassifier = new CSetupClassifier(m_logger, m_marketContext);
-   if (m_setupClassifier == NULL) {
+   m_setupClassifier = new CSetupClassifier(m_logger, m_marketContext);
+   if (m_setupClassifier == NULL)
+   {
       m_logger.Error("SignalEngine: Falha ao criar SetupClassifier");
       return false;
    }
-   
-   if (!m_setupClassifier.Initialize(m_logger, m_marketContext)) {
+
+   if (!m_setupClassifier.Initialize(m_logger, m_marketContext))
+   {
       m_logger.Error("SignalEngine: Falha ao inicializar SetupClassifier");
       delete m_setupClassifier;
       m_setupClassifier = NULL;
       return false;
    }
-   
+
    m_validationCache = ValidationCache();
    m_logger.Info("SignalEngine inicializado com sucesso");
    return true;
@@ -259,23 +303,24 @@ ENUM_TIMEFRAMES CSignalEngine::NormalizeTimeframe(ENUM_TIMEFRAMES timeframe)
 //+------------------------------------------------------------------+
 //| Verifica se os dados são válidos (com cache)                     |
 //+------------------------------------------------------------------+
-bool CSignalEngine::CheckDataValidity(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod = "")
-{
+bool CSignalEngine::CheckDataValidity(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod = "") {
    ENUM_TIMEFRAMES normalizedTF = NormalizeTimeframe(timeframe);
    
-   // Verificar cache primeiro
-   if (m_validationCache.Matches(symbol, normalizedTF) && !m_validationCache.IsExpired())
-   {
-      return m_validationCache.isValid;
+   // OTIMIZAÇÃO: Verificar cache primeiro
+   if(GetCachedValidation(symbol, normalizedTF)) {
+      return true;
    }
    
    // Realizar validação completa
    bool result = PerformFullValidation(symbol, normalizedTF, callingMethod);
    
-   // Atualizar cache
-   m_validationCache.Update(symbol, normalizedTF, result);
+   // OTIMIZAÇÃO: Armazenar no cache
+   SetCachedValidation(symbol, normalizedTF, result);
    
-   LogValidationResult(result, symbol, normalizedTF, callingMethod);
+   // OTIMIZAÇÃO: Log apenas se for erro ou primeira validação
+   if(!result || callingMethod == "CSignalEngine::IsDataValid") {
+      LogValidationResult(result, symbol, normalizedTF, callingMethod);
+   }
    
    return result;
 }
@@ -283,17 +328,122 @@ bool CSignalEngine::CheckDataValidity(string symbol, ENUM_TIMEFRAMES timeframe, 
 //+------------------------------------------------------------------+
 //| Executa validação completa dos dados                             |
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+//| Função auxiliar para verificar disponibilidade de dados          |
+//+------------------------------------------------------------------+
+bool CSignalEngine::CheckIndicatorReady(int handle, string symbol, string context = "")
+{
+   if(handle == INVALID_HANDLE) {
+      if(m_logger != NULL) {
+         m_logger.Error("SignalEngine: " + context + "Handle inválido para " + symbol);
+      }
+      return false;
+   }
+   
+   // Verificar se o indicador calculou dados suficientes
+   int calculated = BarsCalculated(handle);
+   if(calculated < 0) {
+      if(m_logger != NULL) {
+         m_logger.Debug("SignalEngine: " + context + "Indicador não pronto para " + symbol + " (BarsCalculated: " + IntegerToString(calculated) + ")");
+      }
+      return false;
+   }
+   
+   if(calculated < 20) { // Mínimo para análise
+      if(m_logger != NULL) {
+         m_logger.Debug("SignalEngine: " + context + "Indicador com poucas barras para " + symbol + " (" + IntegerToString(calculated) + "/20)");
+      }
+      return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Função auxiliar para copiar buffer com retry                     |
+//+------------------------------------------------------------------+
+int CSignalEngine::SafeCopyBuffer(int handle, int bufferIndex, int start, int count, double &buffer[], string symbol = "", string context = "")
+{
+   if(!CheckIndicatorReady(handle, symbol, context)) {
+      return -1;
+   }
+   
+   ArraySetAsSeries(buffer, true);
+   int attempts = 0;
+   int maxAttempts = 3;
+   int copied = 0;
+   
+   while(attempts < maxAttempts) {
+      ResetLastError();
+      copied = CopyBuffer(handle, bufferIndex, start, count, buffer);
+      
+      if(copied >= count) {
+         return copied; // Sucesso
+      }
+      
+      int error = GetLastError();
+      attempts++;
+      
+      if(error == 4806 && attempts < maxAttempts) {
+         // Aguardar e tentar novamente
+         Sleep(5 + attempts * 5); // Espera progressiva: 10ms, 15ms, 20ms
+         continue;
+      } else {
+         // Falha definitiva
+         if(m_logger != NULL && symbol != "") {
+            m_logger.Debug("SignalEngine: " + context + "Falha ao copiar buffer para " + symbol + 
+                         " após " + IntegerToString(attempts) + " tentativas - Erro: " + IntegerToString(error));
+         }
+         break;
+      }
+   }
+   
+   return copied;
+}
+
+//+------------------------------------------------------------------+
+//| Versão melhorada do método de validação com cache                |
+//+------------------------------------------------------------------+
 bool CSignalEngine::PerformFullValidation(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod)
 {
    if (!ValidateBasicParameters(symbol, timeframe, callingMethod))
       return false;
-      
+
    if (!ValidateMarketData(symbol, timeframe, callingMethod))
       return false;
-      
-   if (!ValidateIndicatorAccess(symbol, timeframe, callingMethod))
+
+   // *** VALIDAÇÃO MELHORADA DE INDICADORES ***
+   string context = (callingMethod != "") ? callingMethod + ": " : "";
+   
+   // Criar handle temporário para teste
+   int testHandle = iMA(symbol, timeframe, 20, 0, MODE_EMA, PRICE_CLOSE);
+   
+   if(testHandle == INVALID_HANDLE) {
+      if (m_logger != NULL)
+         m_logger.Error("SignalEngine: " + context + "Falha ao criar handle de teste para " + symbol);
       return false;
-      
+   }
+   
+   // Verificar se está pronto
+   bool isReady = CheckIndicatorReady(testHandle, symbol, context);
+   
+   if(isReady) {
+      // Tentar copiar dados
+      double testBuffer[];
+      int copied = SafeCopyBuffer(testHandle, 0, 0, 3, testBuffer, symbol, context);
+      isReady = (copied > 0);
+   }
+   
+   // Liberar handle de teste
+   IndicatorRelease(testHandle);
+   
+   if(!isReady) {
+      if (m_logger != NULL) {
+         m_logger.Debug("SignalEngine: " + context + "Indicadores não prontos para " + symbol + " - aguardando próximo tick");
+      }
+      return false;
+   }
+
    return true;
 }
 
@@ -340,8 +490,8 @@ bool CSignalEngine::ValidateMarketData(string symbol, ENUM_TIMEFRAMES timeframe,
    {
       if (m_logger != NULL)
          m_logger.Warning("SignalEngine: " + context + "Histórico insuficiente para " + symbol +
-                         " - Necessário: " + IntegerToString(m_lookbackBars) + 
-                         ", Disponível: " + IntegerToString(bars));
+                          " - Necessário: " + IntegerToString(m_lookbackBars) +
+                          ", Disponível: " + IntegerToString(bars));
       return false;
    }
 
@@ -349,7 +499,7 @@ bool CSignalEngine::ValidateMarketData(string symbol, ENUM_TIMEFRAMES timeframe,
    ArraySetAsSeries(close, true);
    ArraySetAsSeries(high, true);
    ArraySetAsSeries(low, true);
-   
+
    if (CopyClose(symbol, timeframe, 0, 3, close) <= 0 ||
        CopyHigh(symbol, timeframe, 0, 3, high) <= 0 ||
        CopyLow(symbol, timeframe, 0, 3, low) <= 0)
@@ -378,10 +528,10 @@ bool CSignalEngine::ValidateMarketData(string symbol, ENUM_TIMEFRAMES timeframe,
 bool CSignalEngine::ValidateIndicatorAccess(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod)
 {
    string context = (callingMethod != "") ? callingMethod + ": " : "";
-   
+
    CIndicatorHandle maHandle;
    maHandle.SetHandle(iMA(symbol, timeframe, 20, 0, MODE_EMA, PRICE_CLOSE));
-   
+
    if (!maHandle.IsValid())
    {
       if (m_logger != NULL)
@@ -389,19 +539,68 @@ bool CSignalEngine::ValidateIndicatorAccess(string symbol, ENUM_TIMEFRAMES timef
       return false;
    }
 
-   double maBuffer[];
-   ArraySetAsSeries(maBuffer, true);
-   int copied = CopyBuffer(maHandle.GetHandle(), 0, 0, 3, maBuffer);
-   
-   if (copied <= 0)
-   {
+   // *** CORREÇÃO PRINCIPAL: Verificar se o indicador está pronto ***
+   int calculated = BarsCalculated(maHandle.GetHandle());
+   if(calculated < 0) {
       if (m_logger != NULL)
-         m_logger.Error("SignalEngine: " + context + "Falha ao copiar dados de indicador para " + 
-                        symbol + " - Erro: " + IntegerToString(GetLastError()));
+         m_logger.Warning("SignalEngine: " + context + "Indicador não calculado para " + symbol + " (BarsCalculated: " + IntegerToString(calculated) + ")");
+      return false;
+   }
+   
+   if(calculated < 50) { // Precisamos de pelo menos 50 barras calculadas
+      if (m_logger != NULL)
+         m_logger.Warning("SignalEngine: " + context + "Indicador com poucas barras calculadas para " + symbol + " (" + IntegerToString(calculated) + "/50)");
       return false;
    }
 
-   // Verificação de spread (warning apenas)
+   // *** TENTATIVA COM RETRY E TIMEOUT ***
+   double maBuffer[];
+   ArraySetAsSeries(maBuffer, true);
+   
+   int attempts = 0;
+   int maxAttempts = 3;
+   int copied = 0;
+   
+   while(attempts < maxAttempts) {
+      ResetLastError();
+      copied = CopyBuffer(maHandle.GetHandle(), 0, 0, 3, maBuffer);
+      
+      if(copied > 0) {
+         break; // Sucesso!
+      }
+      
+      int error = GetLastError();
+      attempts++;
+      
+      if(error == 4806) { // ERR_INDICATOR_DATA_NOT_FOUND
+         if (m_logger != NULL) {
+            m_logger.Debug("SignalEngine: " + context + "Tentativa " + IntegerToString(attempts) + "/" + IntegerToString(maxAttempts) + 
+                         " - Dados do indicador não encontrados para " + symbol + " (erro 4806)");
+         }
+         
+         if(attempts < maxAttempts) {
+            Sleep(10); // Aguardar 10ms antes da próxima tentativa
+            continue;
+         }
+      } else {
+         // Outro tipo de erro
+         if (m_logger != NULL) {
+            m_logger.Error("SignalEngine: " + context + "Erro diferente de 4806 ao copiar dados de indicador para " +
+                         symbol + " - Erro: " + IntegerToString(error));
+         }
+         return false;
+      }
+   }
+   
+   if(copied <= 0) {
+      if (m_logger != NULL) {
+         m_logger.Warning("SignalEngine: " + context + "Falha ao copiar dados de indicador para " + symbol + 
+                        " após " + IntegerToString(maxAttempts) + " tentativas - Erro: " + IntegerToString(GetLastError()));
+      }
+      return false;
+   }
+
+   // *** VERIFICAÇÃO DE SPREAD (warning apenas) ***
    MqlTick tick;
    if (SymbolInfoTick(symbol, tick))
    {
@@ -412,7 +611,7 @@ bool CSignalEngine::ValidateIndicatorAccess(string symbol, ENUM_TIMEFRAMES timef
       {
          if (m_logger != NULL)
             m_logger.Warning("SignalEngine: " + context + "Spread elevado para " + symbol +
-                             ": " + DoubleToString(spread, 5) + 
+                             ": " + DoubleToString(spread, 5) +
                              " (máx: " + DoubleToString(maxSpread, 5) + ")");
       }
    }
@@ -425,18 +624,19 @@ bool CSignalEngine::ValidateIndicatorAccess(string symbol, ENUM_TIMEFRAMES timef
 //+------------------------------------------------------------------+
 void CSignalEngine::LogValidationResult(bool result, string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod)
 {
-   if (m_logger == NULL) return;
-   
+   if (m_logger == NULL)
+      return;
+
    string context = (callingMethod != "") ? callingMethod + ": " : "";
-   
+
    if (result)
    {
-      m_logger.Debug("SignalEngine: " + context + "Dados válidos para " + symbol + 
+      m_logger.Debug("SignalEngine: " + context + "Dados válidos para " + symbol +
                      " (" + EnumToString(timeframe) + ")");
    }
    else
    {
-      m_logger.Warning("SignalEngine: " + context + "Dados inválidos para " + symbol + 
+      m_logger.Warning("SignalEngine: " + context + "Dados inválidos para " + symbol +
                        " (" + EnumToString(timeframe) + ")");
    }
 }
@@ -447,15 +647,18 @@ void CSignalEngine::LogValidationResult(bool result, string symbol, ENUM_TIMEFRA
 double CSignalEngine::GetMaxAllowedSpread(string symbol)
 {
    // Spreads específicos por tipo de ativo
-   if (StringFind(symbol, "WIN") >= 0) return 10.0;  // Mini Índice
-   if (StringFind(symbol, "WDO") >= 0) return 3.0;   // Mini Dólar
-   if (StringFind(symbol, "BIT") >= 0) return 50.0;  // Bitcoin
-   
+   if (StringFind(symbol, "WIN") >= 0)
+      return 10.0; // Mini Índice
+   if (StringFind(symbol, "WDO") >= 0)
+      return 3.0; // Mini Dólar
+   if (StringFind(symbol, "BIT") >= 0)
+      return 50.0; // Bitcoin
+
    // Para outros símbolos: 3x o spread atual
    long currentSpreadPoints = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    double currentSpread = currentSpreadPoints * point;
-   
+
    return MathMax(currentSpread * 3.0, point * 5.0); // Mínimo de 5 pontos
 }
 
@@ -545,13 +748,16 @@ Signal CSignalEngine::GenerateTrendSignals(string symbol, ENUM_TIMEFRAMES timefr
 
    // Tentar gerar sinais com diferentes estratégias de tendência
    signal = GenerateSpikeAndChannelSignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    signal = GeneratePullbackToEMASignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    signal = GenerateBreakoutPullbackSignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    return signal;
 }
@@ -575,10 +781,12 @@ Signal CSignalEngine::GenerateRangeSignals(string symbol, ENUM_TIMEFRAMES timefr
    }
 
    signal = GenerateRangeExtremesRejectionSignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    signal = GenerateFailedBreakoutSignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    return signal;
 }
@@ -602,10 +810,12 @@ Signal CSignalEngine::GenerateReversalSignals(string symbol, ENUM_TIMEFRAMES tim
    }
 
    signal = GenerateReversalPatternSignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    signal = GenerateDivergenceSignal(symbol, timeframe);
-   if (signal.id > 0) return signal;
+   if (signal.id > 0)
+      return signal;
 
    return signal;
 }
@@ -678,10 +888,12 @@ SETUP_QUALITY CSignalEngine::ClassifySetupQuality(string symbol, ENUM_TIMEFRAMES
 
    if (signal.id <= 0)
       return SETUP_INVALID;
-   
+
    // Verificação de segurança
-   if (m_setupClassifier == NULL) {
-      if (m_logger != NULL) {
+   if (m_setupClassifier == NULL)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Error("SignalEngine: SetupClassifier não inicializado");
       }
       return SETUP_INVALID;
@@ -695,26 +907,32 @@ SETUP_QUALITY CSignalEngine::ClassifySetupQuality(string symbol, ENUM_TIMEFRAMES
 //+------------------------------------------------------------------+
 bool CSignalEngine::IsValidSignal(Signal &signal)
 {
-   if (signal.id <= 0) return false;
-   if (signal.symbol == "") return false;
-   if (signal.direction != ORDER_TYPE_BUY && signal.direction != ORDER_TYPE_SELL) return false;
-   if (signal.entryPrice <= 0 || signal.stopLoss <= 0) return false;
+   if (signal.id <= 0)
+      return false;
+   if (signal.symbol == "")
+      return false;
+   if (signal.direction != ORDER_TYPE_BUY && signal.direction != ORDER_TYPE_SELL)
+      return false;
+   if (signal.entryPrice <= 0 || signal.stopLoss <= 0)
+      return false;
 
    // Verificar se o stop loss está no lado correto da entrada
-   if (signal.direction == ORDER_TYPE_BUY && signal.stopLoss >= signal.entryPrice) return false;
-   if (signal.direction == ORDER_TYPE_SELL && signal.stopLoss <= signal.entryPrice) return false;
+   if (signal.direction == ORDER_TYPE_BUY && signal.stopLoss >= signal.entryPrice)
+      return false;
+   if (signal.direction == ORDER_TYPE_SELL && signal.stopLoss <= signal.entryPrice)
+      return false;
 
    // Verificar se pelo menos um take profit é válido e está em ordem lógica
    bool hasValidTakeProfit = false;
    double lastValidTP = signal.entryPrice;
-   
+
    for (int i = 0; i < 3; i++)
    {
       if (signal.takeProfits[i] > 0)
       {
          bool validDirection = false;
          bool validOrder = false;
-         
+
          if (signal.direction == ORDER_TYPE_BUY)
          {
             validDirection = (signal.takeProfits[i] > signal.entryPrice);
@@ -725,7 +943,7 @@ bool CSignalEngine::IsValidSignal(Signal &signal)
             validDirection = (signal.takeProfits[i] < signal.entryPrice);
             validOrder = (signal.takeProfits[i] < lastValidTP);
          }
-         
+
          if (validDirection && validOrder)
          {
             hasValidTakeProfit = true;
@@ -744,11 +962,13 @@ bool CSignalEngine::IsValidSignal(Signal &signal)
       }
    }
 
-   if (!hasValidTakeProfit) return false;
+   if (!hasValidTakeProfit)
+      return false;
 
    // Verificar se a relação risco/retorno é aceitável
    signal.CalculateRiskRewardRatio();
-   if (signal.riskRewardRatio < m_minRiskReward) return false;
+   if (signal.riskRewardRatio < m_minRiskReward)
+      return false;
 
    return true;
 }
@@ -781,47 +1001,58 @@ double CSignalEngine::CalculateSignalStrength(string symbol, ENUM_TIMEFRAMES tim
 //+------------------------------------------------------------------+
 //| Gera sinal baseado em spike e canal                              |
 //+------------------------------------------------------------------+
-Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
+Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAMES timeframe) {
    Signal signal;
    signal.id = 0;
 
-   if (!CheckDataValidity(symbol, timeframe, "GenerateSpikeAndChannelSignal"))
+   if(!CheckDataValidity(symbol, timeframe, "GenerateSpikeAndChannelSignal"))
       return signal;
 
-   if (m_marketContext != NULL && !m_marketContext.IsTrendUp() && !m_marketContext.IsTrendDown())
-   {
-      if (m_logger != NULL)
+   if(m_marketContext != NULL && !m_marketContext.IsTrendUp() && !m_marketContext.IsTrendDown()) {
+      if(m_logger != NULL)
          m_logger.Debug("SignalEngine: Mercado não está em tendência para padrão Spike & Channel");
       return signal;
    }
 
-   CSpikeAndChannel *spikeAndChannel = new CSpikeAndChannel();
-   if (spikeAndChannel == NULL)
-   {
-      if (m_logger != NULL)
-         m_logger.Error("SignalEngine: Falha ao criar objeto SpikeAndChannel");
+   // OTIMIZAÇÃO: Verificar cooldown antes de processar
+   if(IsInCooldown(symbol, "Spike and Channel")) {
+      if(m_logger != NULL) {
+         m_logger.Debug("SignalEngine: Spike & Channel em cooldown para " + symbol);
+      }
       return signal;
    }
 
-   if (!spikeAndChannel.Initialize(m_logger, m_marketContext))
-   {
-      if (m_logger != NULL)
-         m_logger.Error("SignalEngine: Falha ao inicializar objeto SpikeAndChannel");
-      delete spikeAndChannel;
-      return signal;
-   }
+   // OTIMIZAÇÃO: Reutilizar objeto em cache
+   if(m_spikeAndChannelCache == NULL) {
+      m_spikeAndChannelCache = new CSpikeAndChannel();
+      if(m_spikeAndChannelCache == NULL) {
+         if(m_logger != NULL)
+            m_logger.Error("SignalEngine: Falha ao criar objeto SpikeAndChannel");
+         return signal;
+      }
 
-   spikeAndChannel.SetSpikeParameters(3, 5, 0.7);
-   spikeAndChannel.SetChannelParameters(0.3);
-   spikeAndChannel.SetLookbackBars(m_lookbackBars);
+      if(!m_spikeAndChannelCache.Initialize(m_logger, m_marketContext)) {
+         if(m_logger != NULL)
+            m_logger.Error("SignalEngine: Falha ao inicializar objeto SpikeAndChannel");
+         delete m_spikeAndChannelCache;
+         m_spikeAndChannelCache = NULL;
+         return signal;
+      }
+
+      // Configurar parâmetros apenas uma vez
+      m_spikeAndChannelCache.SetSpikeParameters(3, 5, 0.7);
+      m_spikeAndChannelCache.SetChannelParameters(0.3);
+      m_spikeAndChannelCache.SetLookbackBars(m_lookbackBars);
+      
+      if(m_logger != NULL) {
+         m_logger.Info("SignalEngine: SpikeAndChannel cache criado e configurado");
+      }
+   }
 
    SpikeChannelPattern pattern;
-   if (!spikeAndChannel.DetectPattern(symbol, timeframe, pattern))
-   {
-      if (m_logger != NULL)
+   if(!m_spikeAndChannelCache.DetectPattern(symbol, timeframe, pattern)) {
+      if(m_logger != NULL)
          m_logger.Debug("SignalEngine: Padrão Spike & Channel não detectado para " + symbol);
-      delete spikeAndChannel;
       return signal;
    }
 
@@ -833,22 +1064,21 @@ Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAM
       ENTRY_FECHAMENTO_FORTE
    };
    
-   for (int i = 0; i < ArraySize(entryTypes); i++)
-   {
-      signal = spikeAndChannel.GenerateSignal(symbol, timeframe, pattern, entryTypes[i]);
-      if (signal.id > 0) break;
+   for(int i = 0; i < ArraySize(entryTypes); i++) {
+      signal = m_spikeAndChannelCache.GenerateSignal(symbol, timeframe, pattern, entryTypes[i]);
+      if(signal.id > 0) {
+         // OTIMIZAÇÃO: Adicionar ao cooldown quando sinal for gerado
+         AddToCooldown(symbol, "Spike and Channel", 180); // 3 minutos
+         break;
+      }
    }
 
-   delete spikeAndChannel;
-
-   if (signal.id > 0)
-   {
+   if(signal.id > 0) {
       signal.timeframe = timeframe;
-      if (m_logger != NULL)
-      {
+      if(m_logger != NULL) {
          m_logger.Info(StringFormat("SignalEngine: Sinal Spike & Channel gerado para %s - %s",
-                                    symbol,
-                                    signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda"));
+                                   symbol,
+                                   signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda"));
       }
    }
 
@@ -886,3 +1116,109 @@ Signal CSignalEngine::GenerateBreakoutPullbackSignal(string symbol, ENUM_TIMEFRA
 }
 
 //+
+
+bool CSignalEngine::IsInCooldown(string symbol, string strategy)
+{
+   datetime currentTime = TimeCurrent();
+
+   for (int i = 0; i < ArraySize(m_signalCooldowns); i++)
+   {
+      if (m_signalCooldowns[i].symbol == symbol &&
+          m_signalCooldowns[i].strategy == strategy)
+      {
+
+         if (currentTime - m_signalCooldowns[i].lastSignalTime < m_signalCooldowns[i].cooldownSeconds)
+         {
+            return true;
+         }
+         else
+         {
+            // Remover cooldown expirado
+            for (int j = i; j < ArraySize(m_signalCooldowns) - 1; j++)
+            {
+               m_signalCooldowns[j] = m_signalCooldowns[j + 1];
+            }
+            ArrayResize(m_signalCooldowns, ArraySize(m_signalCooldowns) - 1);
+            return false;
+         }
+      }
+   }
+
+   return false;
+}
+
+void CSignalEngine::AddToCooldown(string symbol, string strategy, int cooldownSeconds = 180)
+{
+   // Verificar se já existe
+   for (int i = 0; i < ArraySize(m_signalCooldowns); i++)
+   {
+      if (m_signalCooldowns[i].symbol == symbol &&
+          m_signalCooldowns[i].strategy == strategy)
+      {
+         m_signalCooldowns[i].lastSignalTime = TimeCurrent();
+         m_signalCooldowns[i].cooldownSeconds = cooldownSeconds;
+         return;
+      }
+   }
+
+   // Adicionar novo
+   int size = ArraySize(m_signalCooldowns);
+   ArrayResize(m_signalCooldowns, size + 1);
+   m_signalCooldowns[size].symbol = symbol;
+   m_signalCooldowns[size].strategy = strategy;
+   m_signalCooldowns[size].lastSignalTime = TimeCurrent();
+   m_signalCooldowns[size].cooldownSeconds = cooldownSeconds;
+}
+
+bool CSignalEngine::GetCachedValidation(string symbol, ENUM_TIMEFRAMES timeframe)
+{
+   datetime currentTime = TimeCurrent();
+
+   for (int i = 0; i < ArraySize(m_symbolCache); i++)
+   {
+      if (m_symbolCache[i].symbol == symbol &&
+          m_symbolCache[i].timeframe == timeframe)
+      {
+
+         if (currentTime - m_symbolCache[i].lastValidation < m_symbolCache[i].validitySeconds)
+         {
+            return m_symbolCache[i].isValid;
+         }
+         else
+         {
+            // Cache expirado, remover
+            for (int j = i; j < ArraySize(m_symbolCache) - 1; j++)
+            {
+               m_symbolCache[j] = m_symbolCache[j + 1];
+            }
+            ArrayResize(m_symbolCache, ArraySize(m_symbolCache) - 1);
+            return false;
+         }
+      }
+   }
+
+   return false;
+}
+void CSignalEngine::SetCachedValidation(string symbol, ENUM_TIMEFRAMES timeframe, bool isValid)
+{
+   // Verificar se já existe
+   for (int i = 0; i < ArraySize(m_symbolCache); i++)
+   {
+      if (m_symbolCache[i].symbol == symbol &&
+          m_symbolCache[i].timeframe == timeframe)
+      {
+         m_symbolCache[i].isValid = isValid;
+         m_symbolCache[i].lastValidation = TimeCurrent();
+         return;
+      }
+   }
+
+   // Adicionar novo
+   int size = ArraySize(m_symbolCache);
+   ArrayResize(m_symbolCache, size + 1);
+   m_symbolCache[size].symbol = symbol;
+   m_symbolCache[size].timeframe = timeframe;
+   m_symbolCache[size].isValid = isValid;
+   m_symbolCache[size].lastValidation = TimeCurrent();
+   m_symbolCache[size].validitySeconds = 300; // 5 minutos
+}
