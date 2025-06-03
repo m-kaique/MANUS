@@ -89,6 +89,7 @@ struct Signal {
    string           description;         // Descrição textual do sinal
    double           riskRewardRatio;     // Relação risco/retorno
    bool             isActive;            // Indica se o sinal está ativo
+   ENUM_TIMEFRAMES   timeframe;          // Indica o TimeFrameDoSinal
    
    // Construtor com valores padrão
    Signal() {
@@ -104,7 +105,7 @@ struct Signal {
       strategy = "";
       description = "";
       riskRewardRatio = 0.0;
-      isActive = false;
+      isActive = false; 
    }
    
    // Método para calcular a relação risco/retorno

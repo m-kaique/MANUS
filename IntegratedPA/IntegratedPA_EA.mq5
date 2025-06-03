@@ -85,7 +85,7 @@ datetime g_lastBarTimes[];
 datetime g_lastExportTime = 0;
 
 // Constante para o mínimo de barras necessárias
-#define MIN_REQUIRED_BARS 100
+#define MIN_REQUIRED_BARS 200
 
 //+------------------------------------------------------------------+
 //| Função para verificar se o histórico está disponível             |
