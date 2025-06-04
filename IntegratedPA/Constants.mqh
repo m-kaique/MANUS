@@ -1,3 +1,6 @@
+#ifndef CONSTANTS_MQH_
+#define CONSTANTS_MQH_
+
 //+------------------------------------------------------------------+
 //|                                                   Constants.mqh |
 //|                                                   ©2025, MANUS |
@@ -118,9 +121,9 @@
 // WIN (Mini Índice Bovespa) - Valores em pontos
 #define WIN_SPIKE_MAX_STOP          200   // Stop máximo durante spike
 #define WIN_CHANNEL_MAX_STOP        150   // Stop máximo durante canal
-#define WIN_FIRST_TARGET            500   // Primeiro alvo
-#define WIN_SECOND_TARGET           1000  // Segundo alvo
-#define WIN_TRAILING_STOP           350   // Trailing stop
+#define WIN_FIRST_TARGET            150   // Primeiro alvo
+#define WIN_SECOND_TARGET           250  // Segundo alvo
+#define WIN_TRAILING_STOP           250   // Trailing stop
 
 // WDO (Mini Dólar) - Valores em pontos
 #define WDO_SPIKE_MAX_STOP          7     // Stop máximo durante spike
@@ -176,3 +179,5 @@
 #define COLOR_LOSS                  clrRed
 #define COLOR_WARNING               clrOrange
 #define COLOR_INFO                  clrCyan
+
+#endif // CONSTANTS_MQH_

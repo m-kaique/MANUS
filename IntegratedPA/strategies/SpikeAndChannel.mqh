@@ -1,5 +1,8 @@
+#ifndef SPIKEANDCHANNEL_MQH_
+#define SPIKEANDCHANNEL_MQH_
+
 //+------------------------------------------------------------------+
-//|                                           SpikeAndChannel.mqh |
+//|                                          SpikeAndChannel.mqh ||
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -1004,18 +1007,12 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
    signal.strategy = "Spike and Channel";
    signal.isActive = true;
    
-   // Calcular take profits
-   double riskPoints = MathAbs(entryPrice - stopLoss);
-   
-   if(pattern.isUptrend) {
-      signal.takeProfits[0] = entryPrice + riskPoints * 1.0; // 1:1
-      signal.takeProfits[1] = entryPrice + riskPoints * 2.0; // 2:1
-      signal.takeProfits[2] = entryPrice + riskPoints * 3.0; // 3:1
-   } else {
-      signal.takeProfits[0] = entryPrice - riskPoints * 1.0; // 1:1
-      signal.takeProfits[1] = entryPrice - riskPoints * 2.0; // 2:1
-      signal.takeProfits[2] = entryPrice - riskPoints * 3.0; // 3:1
-   }
+   // --- REMOÇÃO DA LÓGICA DE TP ---
+   // Os take profits serão calculados pelo RiskManager
+   signal.takeProfits[0] = 0; // TP inicial é 0
+   signal.takeProfits[1] = 0;
+   signal.takeProfits[2] = 0;
+   // --- FIM DA REMOÇÃO ---  }
    
    // Calcular relação risco/retorno
    signal.CalculateRiskRewardRatio();
@@ -1035,3 +1032,6 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
    
    return signal;
 }
+
+
+#endif // SPIKEANDCHANNEL_MQH_

@@ -1,5 +1,8 @@
+#ifndef UTILS_MQH_
+#define UTILS_MQH_
+
 //+------------------------------------------------------------------+
-//|                                                      Utils.mqh |
+//|                                                     Utils.mqh ||
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -663,3 +666,6 @@ bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int lookbackBa
    
    return false;
 }
+
+
+#endif // UTILS_MQH_

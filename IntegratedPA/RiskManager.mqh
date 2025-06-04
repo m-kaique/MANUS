@@ -1,3 +1,6 @@
+#ifndef RISKMANAGER_MQH_
+#define RISKMANAGER_MQH_
+
 //+------------------------------------------------------------------+
 //|                                             RiskManager.mqh |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
@@ -17,6 +20,25 @@
 //| Classe para gestão de risco e dimensionamento de posições        |
 //+------------------------------------------------------------------+
 class CRiskManager {
+public:
+   // Estrutura para armazenar parâmetros específicos por símbolo (TORNADA PÚBLICA)
+   struct SymbolRiskParams {
+      string         symbol;
+      double         riskPercentage;       // Risco base para cálculo de lote
+      double         maxLotSize;           // Lote máximo permitido
+      double         defaultStopPoints;    // Stop loss padrão em pontos (usado se ATR falhar)
+      double         atrMultiplier;        // Multiplicador ATR para stop loss
+      bool           usePartials;          // Usar fechamentos parciais?
+      double         partialLevels[10];    // Níveis de R:R para parciais
+      double         partialVolumes[10];   // Volumes para cada parcial (em %)
+      
+      // --- NOVOS CAMPOS PARA CONSTANTES DE RISCO ---
+      double         firstTargetPoints;    // Pontos para o primeiro TP
+      double         spikeMaxStopPoints;   // Pontos máximos de SL em Spike
+      double         channelMaxStopPoints; // Pontos máximos de SL em Canal
+      double         trailingStopPoints;   // Pontos para Trailing Stop
+   };
+
 private:
    // Objetos internos
    CLogger*        m_logger;
@@ -30,18 +52,6 @@ private:
    double          m_accountBalance;
    double          m_accountEquity;
    double          m_accountFreeMargin;
-   
-   // Estrutura para armazenar parâmetros específicos por símbolo
-   struct SymbolRiskParams {
-      string         symbol;
-      double         riskPercentage;
-      double         maxLotSize;
-      double         defaultStopPoints;
-      double         atrMultiplier;
-      bool           usePartials;
-      double         partialLevels[10];    // Níveis de R:R para parciais
-      double         partialVolumes[10];   // Volumes para cada parcial (em %)
-   };
    
    // Array de parâmetros por símbolo
    SymbolRiskParams m_symbolParams[];
@@ -71,6 +81,8 @@ public:
    bool AddSymbol(string symbol, double riskPercentage, double maxLotSize);
    bool ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier);
    bool ConfigureSymbolPartials(string symbol, bool usePartials, double &levels[], double &volumes[]);
+   bool ConfigureSymbolRiskConstants(string symbol, double tp1Points, double spikeStopPoints, double channelStopPoints, double trailingPoints); // <-- NOVO MÉTODO
+   bool GetSymbolRiskParams(string symbol, SymbolRiskParams &params); // <-- MODIFICADO: Pass-by-reference
    
    // Métodos para cálculo de risco
    OrderRequest BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase);
@@ -111,7 +123,7 @@ CRiskManager::~CRiskManager() {
 //+------------------------------------------------------------------+
 bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext) {
    // Verificar parâmetros
-   if(logger == NULL || marketContext == NULL) {
+   if(!logger || !marketContext) {
       Print("CRiskManager::Initialize - Logger ou MarketContext não podem ser NULL");
       return false;
    }
@@ -139,7 +151,7 @@ void CRiskManager::UpdateAccountInfo() {
    m_accountEquity = AccountInfoDouble(ACCOUNT_EQUITY);
    m_accountFreeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    
-   if(m_logger != NULL) {
+   if(m_logger) {
       m_logger.Debug(StringFormat("Informações da conta atualizadas: Saldo=%.2f, Equity=%.2f, Margem Livre=%.2f", 
                                  m_accountBalance, m_accountEquity, m_accountFreeMargin));
    }
@@ -157,7 +169,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
       m_symbolParams[index].riskPercentage = riskPercentage;
       m_symbolParams[index].maxLotSize = maxLotSize;
       
-      if(m_logger != NULL) {
+      if(m_logger) {
          m_logger.Info("RiskManager: Parâmetros atualizados para " + symbol);
       }
       
@@ -170,7 +182,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
    
    // Verificar se o redimensionamento foi bem-sucedido
    if(ArrayResize(m_symbolParams, newSize) != newSize) {
-      if(m_logger != NULL) {
+      if(m_logger) {
          m_logger.Error("RiskManager: Falha ao redimensionar array de parâmetros");
       }
       return false;
@@ -192,7 +204,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
       m_symbolParams[size].partialVolumes[i] = tempVolumes[i];
    }
    
-   if(m_logger != NULL) {
+   if(m_logger) {
       m_logger.Info("RiskManager: Símbolo " + symbol + " adicionado à lista com risco de " + 
                    DoubleToString(m_symbolParams[size].riskPercentage, 2) + "%");
    }
@@ -208,7 +220,7 @@ bool CRiskManager::ConfigureSymbolStopLoss(string symbol, double defaultStopPoin
    int index = FindSymbolIndex(symbol);
    
    if(index < 0) {
-      if(m_logger != NULL) {
+      if(m_logger) {
          m_logger.Error("RiskManager: Símbolo " + symbol + " não encontrado para configuração de stop loss");
       }
       return false;
@@ -218,7 +230,7 @@ bool CRiskManager::ConfigureSymbolStopLoss(string symbol, double defaultStopPoin
    m_symbolParams[index].defaultStopPoints = defaultStopPoints;
    m_symbolParams[index].atrMultiplier = atrMultiplier;
    
-   if(m_logger != NULL) {
+   if(m_logger) {
       m_logger.Info(StringFormat("RiskManager: Stop loss configurado para %s: %.1f pontos, ATR x%.1f", 
                                 symbol, defaultStopPoints, atrMultiplier));
    }
@@ -234,7 +246,7 @@ bool CRiskManager::ConfigureSymbolPartials(string symbol, bool usePartials, doub
    int index = FindSymbolIndex(symbol);
    
    if(index < 0) {
-      if(m_logger != NULL) {
+      if(m_logger) {
          m_logger.Error("RiskManager: Símbolo " + symbol + " não encontrado para configuração de parciais");
       }
       return false;
@@ -245,7 +257,7 @@ bool CRiskManager::ConfigureSymbolPartials(string symbol, bool usePartials, doub
    int volumesSize = ArraySize(volumes);
    
    if(levelsSize != volumesSize || levelsSize == 0) {
-      if(m_logger != NULL) {
+      if(m_logger) {
          m_logger.Error("RiskManager: Arrays de níveis e volumes devem ter o mesmo tamanho e não podem ser vazios");
       }
       return false;
@@ -254,7 +266,7 @@ bool CRiskManager::ConfigureSymbolPartials(string symbol, bool usePartials, doub
    // Verificar se os níveis estão em ordem crescente
    for(int i = 1; i < levelsSize; i++) {
       if(levels[i] <= levels[i-1]) {
-         if(m_logger != NULL) {
+         if(m_logger) {
             m_logger.Warning(StringFormat("RiskManager: Níveis de parciais devem estar em ordem crescente. Nível %d (%.2f) <= Nível %d (%.2f)", 
                                         i, levels[i], i-1, levels[i-1]));
          }
@@ -570,6 +582,37 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
          stopDistance = m_symbolParams[index].defaultStopPoints * point;
    }
    
+   // --- INÍCIO DA CORREÇÃO MODULAR: Limitar Stop Loss pelas Constantes Dinâmicas ---
+   SymbolRiskParams params; // Declarar struct local
+   if(GetSymbolRiskParams(symbol, params)) { // Passar por referência e checar retorno
+      double maxStopPoints = 0;
+      // Determinar contexto (Spike vs Canal) - Usando 'phase' como proxy
+      // Idealmente, a estratégia específica (SpikeAndChannel) deveria fornecer essa informação
+      if (phase == PHASE_TREND && params.spikeMaxStopPoints > 0) { // Assumindo Spike em Tendência
+         maxStopPoints = params.spikeMaxStopPoints;
+      } else if (phase == PHASE_RANGE && params.channelMaxStopPoints > 0) { // Assumindo Canal em Range
+         maxStopPoints = params.channelMaxStopPoints;
+      } else if (params.spikeMaxStopPoints > 0) { // Fallback para o stop de spike se definido
+         maxStopPoints = params.spikeMaxStopPoints;
+      } else if (params.channelMaxStopPoints > 0) { // Fallback para o stop de canal se definido
+         maxStopPoints = params.channelMaxStopPoints;
+      } // Se nenhum estiver definido, não há limite máximo específico do ativo
+
+      if (maxStopPoints > 0) {
+         double maxStopDistance = maxStopPoints * point;
+         if (stopDistance > maxStopDistance) {
+            stopDistance = maxStopDistance;
+            if(m_logger) {
+               m_logger.Debug(StringFormat("RiskManager: Stop distance para %s limitado pelo máximo dinâmico de %.0f pontos", symbol, maxStopPoints));
+            }
+         }
+      }
+   } else {
+       // Log de aviso já feito em GetSymbolRiskParams
+       // Não fazer nada se os parâmetros não foram encontrados, usar stop calculado
+   }
+   // --- FIM DA CORREÇÃO MODULAR ---
+
    // Garantir distância mínima
    double minStopDistance = 10 * point; // Mínimo de 10 pontos
    stopDistance = MathMax(stopDistance, minStopDistance);
@@ -642,36 +685,42 @@ double CRiskManager::CalculateTakeProfit(string symbol, ENUM_ORDER_TYPE orderTyp
       return 0;
    }
    
-   // Encontrar índice do símbolo
-   int index = FindSymbolIndex(symbol);
-   
-   // Definir relação risco/retorno padrão
-   double riskRewardRatio = 2.0; // Padrão: 1:2
-   
-   if(index >= 0) {
-      // Ajustar com base nas configurações do símbolo
-      // (implementação futura)
-   }
-   
-   // Calcular distância do stop loss
-   double stopDistance = MathAbs(entryPrice - stopLoss);
-   
-   // Calcular preço do take profit
+   // Encontra   // --- INÍCIO DA CORREÇÃO MODULAR: Calcular TP usando Constantes Dinâmicas ---
    double takeProfit = 0;
+   double point = GetSymbolPointValue(symbol);
+   if(point <= 0) return 0;
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+
+   SymbolRiskParams params; // Declarar struct local
    
-   if(orderType == ORDER_TYPE_BUY) {
-      takeProfit = entryPrice + (stopDistance * riskRewardRatio);
+   if(GetSymbolRiskParams(symbol, params) && params.firstTargetPoints > 0) { // Passar por referência e checar retorno e valor
+      // Usar o primeiro alvo definido nos parâmetros do símbolo
+      double firstTargetPoints = params.firstTargetPoints;
+      
+      // Nota: A estrutura OrderRequest só suporta um TP.
+      // A lógica de múltiplos TPs precisaria ser gerenciada separadamente.
+      if(orderType == ORDER_TYPE_BUY) {
+         takeProfit = entryPrice + firstTargetPoints * point;
+      } else {
+         takeProfit = entryPrice - firstTargetPoints * point;
+      }
    } else {
-      takeProfit = entryPrice - (stopDistance * riskRewardRatio);
+      // Fallback MUITO BÁSICO se parâmetros não encontrados ou TP1 não definido
+      // Idealmente, não deveria chegar aqui se a configuração estiver correta.
+      // Remover fallback com riskRewardRatio
+      if(m_logger) {
+         m_logger.Warning("RiskManager: Não foi possível determinar TP dinâmico para " + symbol + ". TP não será definido (0).");
+      }
+      takeProfit = 0; // Não definir TP se não houver configuração
    }
-   
+   // --- FIM DA CORREÇÃO MODULAR ---
+
    // Normalizar o preço do take profit
    takeProfit = NormalizeDouble(takeProfit, digits);
    
-   if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("RiskManager: Take profit calculado para %s: %.5f (R:R = 1:%.1f)", 
-                                symbol, takeProfit, riskRewardRatio));
+   if(m_logger) {
+      m_logger.Debug(StringFormat("RiskManager: Take profit calculado para %s: %.5f", 
+                                symbol, takeProfit));
    }
    
    return takeProfit;
@@ -991,3 +1040,53 @@ double CRiskManager::GetCurrentTotalRisk() {
    return 0.0;
 }
 //+------------------------------------------------------------------+
+
+
+//+------------------------------------------------------------------+
+//| Configurar constantes de risco para um símbolo                   |
+//+------------------------------------------------------------------+
+bool CRiskManager::ConfigureSymbolRiskConstants(string symbol, double tp1Points, double spikeStopPoints, double channelStopPoints, double trailingPoints) {
+   // Encontrar índice do símbolo
+   int index = FindSymbolIndex(symbol);
+   
+   if(index < 0) {
+      if(m_logger != NULL) {
+         m_logger.Error("RiskManager: Símbolo " + symbol + " não encontrado para configuração de constantes de risco");
+      }
+      return false;
+   }
+   
+   // Atualizar parâmetros
+   m_symbolParams[index].firstTargetPoints = tp1Points;
+   m_symbolParams[index].spikeMaxStopPoints = spikeStopPoints;
+   m_symbolParams[index].channelMaxStopPoints = channelStopPoints;
+   m_symbolParams[index].trailingStopPoints = trailingPoints;
+   
+   if(m_logger != NULL) {
+      m_logger.Info(StringFormat("RiskManager: Constantes de risco configuradas para %s: TP1=%.1f, SpikeSL=%.1f, ChanSL=%.1f, TrailSL=%.1f", 
+                                symbol, tp1Points, spikeStopPoints, channelStopPoints, trailingPoints));
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Obter parâmetros de risco para um símbolo (Pass-by-reference)    |
+//+------------------------------------------------------------------+
+bool CRiskManager::GetSymbolRiskParams(string symbol, SymbolRiskParams &params) {
+   int index = FindSymbolIndex(symbol);
+   
+   if(index < 0) {
+      if(m_logger) {
+         m_logger.Warning("RiskManager: Parâmetros de risco não encontrados para " + symbol + ". Retornando false.");
+      }
+      // Não inicializar params aqui, apenas retornar false
+      return false; // Indica que os parâmetros específicos não foram encontrados
+   }
+   
+   // Copiar os parâmetros encontrados para a struct de referência
+   params = m_symbolParams[index]; 
+   return true; // Indica sucesso
+} 
+
+#endif // RISKMANAGER_MQH_

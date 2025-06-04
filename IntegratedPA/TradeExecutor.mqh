@@ -1,5 +1,8 @@
+#ifndef TRADEEXECUTOR_MQH_
+#define TRADEEXECUTOR_MQH_
+
 //+------------------------------------------------------------------+
-//|                                            TradeExecutor.mqh |
+//|                                           TradeExecutor.mqh ||
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -43,6 +46,7 @@ private:
    // Estado
    int             m_lastError;
    string          m_lastErrorDesc;
+   ulong           m_eaMagicNumber; // <-- ADICIONADO: Armazenar Magic Number do EA
    
    // Enumeração para tipos de trailing stop
    enum ENUM_TRAILING_TYPE {
@@ -79,7 +83,7 @@ public:
    ~CTradeExecutor();
    
    // Métodos de inicialização
-   bool Initialize(CLogger* logger);
+   bool Initialize(CLogger* logger, ulong magicNumber); // <-- MODIFICADO: Receber Magic Number
    
    // Métodos de execução
    bool Execute(OrderRequest &request);
@@ -101,6 +105,7 @@ public:
    // Métodos de acesso
    int GetLastError() const { return m_lastError; }
    string GetLastErrorDescription() const { return m_lastErrorDesc; }
+   ulong GetMagicNumber() const { return (m_trade != NULL) ? m_trade.Magic() : 0; }
 };
 
 //+------------------------------------------------------------------+
@@ -129,16 +134,17 @@ CTradeExecutor::~CTradeExecutor() {
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger* logger) {
+bool CTradeExecutor::Initialize(CLogger* logger, ulong magicNumber) { // <-- MODIFICADO: Receber Magic Number
    // Verificar parâmetros
    if(logger == NULL) {
       Print("CTradeExecutor::Initialize - Logger não pode ser NULL");
       return false;
    }
    
-   // Atribuir logger
+   // Atribuir logger e magic number
    m_logger = logger;
-   m_logger.Info("Inicializando TradeExecutor");
+   m_eaMagicNumber = magicNumber; // <-- ADICIONADO: Armazenar Magic Number
+   m_logger.Info("Inicializando TradeExecutor com Magic Number: " + (string)m_eaMagicNumber);
    
    // Criar objeto de trade
    m_trade = new CTrade();
@@ -148,7 +154,7 @@ bool CTradeExecutor::Initialize(CLogger* logger) {
    }
    
    // Configurar objeto de trade
-   m_trade.SetExpertMagicNumber(123456); // Magic number para identificar ordens deste EA
+   m_trade.SetExpertMagicNumber(m_eaMagicNumber); // <-- MODIFICADO: Usar Magic Number recebido
    m_trade.SetMarginMode();
    m_trade.SetTypeFillingBySymbol(Symbol());
    m_trade.SetDeviationInPoints(10); // Desvio máximo de preço em pontos
@@ -1123,3 +1129,6 @@ double CTradeExecutor::CalculateMATrailingStop(string symbol, ENUM_TIMEFRAMES ti
    return newStopLoss;
 }
 //+------------------------------------------------------------------+
+
+
+#endif // TRADEEXECUTOR_MQH_

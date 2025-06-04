@@ -1,5 +1,8 @@
+#ifndef VISUALPANEL_MQH_
+#define VISUALPANEL_MQH_
+
 //+------------------------------------------------------------------+
-//|                                                 VisualPanel.mqh |
+//|                                             VisualPanel.mqh |qh |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -458,3 +461,5 @@ void CVisualPanel::SetPosition(int x, int y) {
       Update();
    }
 }
+
+#endif // VISUALPANEL_MQH_

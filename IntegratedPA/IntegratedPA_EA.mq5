@@ -80,12 +80,19 @@ struct AssetConfig
    double lotStep;
    double tickValue;
    int digits;
-   double riskPercentage;
+   double riskPercentage; // Risco base por trade para este ativo (% da conta)
    bool usePartials;
    double partialLevels[3];
    double partialVolumes[3];
    bool historyAvailable; // Flag para indicar se o histórico está disponível
    int minRequiredBars;   // Mínimo de barras necessárias para análise
+   
+   // --- NOVOS CAMPOS PARA CONSTANTES DE RISCO ---
+   double firstTargetPoints;    // Pontos para o primeiro TP (ex: WIN_FIRST_TARGET)
+   double spikeMaxStopPoints;   // Pontos máximos de SL em Spike (ex: WIN_SPIKE_MAX_STOP)
+   double channelMaxStopPoints; // Pontos máximos de SL em Canal (ex: WIN_CHANNEL_MAX_STOP)
+   double trailingStopPoints;   // Pontos para Trailing Stop (ex: WIN_TRAILING_STOP)
+   // Adicionar outros alvos (TP2, TP3) se necessário para lógicas futuras
 };
 
 // Array de ativos configurados
@@ -123,6 +130,9 @@ bool IsHistoryAvailable(string symbol, ENUM_TIMEFRAMES timeframe, int minBars = 
 //+------------------------------------------------------------------+
 bool SetupAssets()
 {
+   // Incluir constantes para acesso
+   #include "Constants.mqh"
+
    int assetsCount = 0;
 
    // Redimensionar o array de ativos
@@ -164,6 +174,12 @@ bool SetupAssets()
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
+      // --- CARREGAR CONSTANTES DE RISCO BTC ---
+      g_assets[index].firstTargetPoints = BTC_FIRST_TARGET;
+      g_assets[index].spikeMaxStopPoints = BTC_SPIKE_MAX_STOP;
+      g_assets[index].channelMaxStopPoints = BTC_CHANNEL_MAX_STOP;
+      g_assets[index].trailingStopPoints = BTC_TRAILING_STOP;
+
       // Configurar níveis de parciais para BTC
       g_assets[index].partialLevels[0] = 1.0;
       g_assets[index].partialLevels[1] = 2.0;
@@ -203,6 +219,12 @@ bool SetupAssets()
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
+      // --- CARREGAR CONSTANTES DE RISCO WDO ---
+      g_assets[index].firstTargetPoints = WDO_FIRST_TARGET;
+      g_assets[index].spikeMaxStopPoints = WDO_SPIKE_MAX_STOP;
+      g_assets[index].channelMaxStopPoints = WDO_CHANNEL_MAX_STOP;
+      g_assets[index].trailingStopPoints = WDO_TRAILING_STOP;
+
       // Configurar níveis de parciais para WDO
       g_assets[index].partialLevels[0] = 1.0;
       g_assets[index].partialLevels[1] = 1.5;
@@ -241,6 +263,12 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+
+      // --- CARREGAR CONSTANTES DE RISCO WIN ---
+      g_assets[index].firstTargetPoints = WIN_FIRST_TARGET;
+      g_assets[index].spikeMaxStopPoints = WIN_SPIKE_MAX_STOP;
+      g_assets[index].channelMaxStopPoints = WIN_CHANNEL_MAX_STOP;
+      g_assets[index].trailingStopPoints = WIN_TRAILING_STOP;
 
       // Configurar níveis de parciais para WIN
       g_assets[index].partialLevels[0] = 1.0;
@@ -308,6 +336,13 @@ bool ConfigureRiskParameters()
    {
       // Configurar parâmetros de risco específicos para cada ativo
       g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
+
+      // --- NOVO: Configurar constantes de risco dinâmicas ---
+      g_riskManager.ConfigureSymbolRiskConstants(g_assets[i].symbol,
+                                                 g_assets[i].firstTargetPoints,
+                                                 g_assets[i].spikeMaxStopPoints,
+                                                 g_assets[i].channelMaxStopPoints,
+                                                 g_assets[i].trailingStopPoints);
 
       // Configurar parciais para cada ativo
       if (g_assets[i].usePartials)
@@ -408,8 +443,7 @@ int OnInit()
       g_logger.Error("Erro ao criar objeto TradeExecutor");
       return (INIT_FAILED);
    }
-
-   if (!g_tradeExecutor.Initialize(g_logger))
+   if(!g_tradeExecutor.Initialize(g_logger, g_magicNumber)) { // <-- CORRIGIDO: Passar Magic Number
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
       return (INIT_FAILED);
@@ -926,7 +960,7 @@ bool ShouldManagePositions(datetime currentTime)
 }
 
 //+------------------------------------------------------------------+
-//| Gerencia posições existentes                                     |
+//| Gerencia posições existentes (Trailing Stop, etc.)               |
 //+------------------------------------------------------------------+
 void ManageExistingPositions()
 {
@@ -940,13 +974,51 @@ void ManageExistingPositions()
    // Atualizar tempo de último gerenciamento
    lastManagementTime = currentTime;
    
-   // Gerenciar posições abertas (trailing stops, etc.)
-   g_tradeExecutor.ManageOpenPositions();
+   // --- INÍCIO DA IMPLEMENTAÇÃO DO TRAILING STOP ---
+   #include "Constants.mqh" // Incluir para acesso a WIN_TRAILING_STOP
    
-   // Log apenas se houver posições abertas
-   int openPositions = PositionsTotal();
-   if(openPositions > 0 && g_logger != NULL) {
-      g_logger.Debug(StringFormat("Gerenciando %d posições abertas", openPositions));
+   int totalPositions = PositionsTotal();
+   ulong eaMagicNumber = g_tradeExecutor.GetMagicNumber();
+   int managedPositions = 0;
+   
+   for(int i = totalPositions - 1; i >= 0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      // Verificar se a posição pertence a este EA
+      if(PositionGetInteger(POSITION_MAGIC) != eaMagicNumber) continue;
+      
+      managedPositions++;
+      string positionSymbol = PositionGetString(POSITION_SYMBOL);
+      
+      // --- INÍCIO DA CORREÇÃO MODULAR: Aplicar Trailing Stop Dinâmico ---
+      // Declarar struct local para parâmetros de risco
+      CRiskManager::SymbolRiskParams riskParams;
+      
+      // Obter parâmetros de risco para o símbolo da posição (pass-by-reference)
+      if(g_riskManager.GetSymbolRiskParams(positionSymbol, riskParams) && riskParams.trailingStopPoints > 0) {
+         // Tentar aplicar o trailing stop fixo com base nos parâmetros do símbolo
+         g_tradeExecutor.ApplyTrailingStop(ticket, riskParams.trailingStopPoints);
+      } else {
+         // Log se os parâmetros ou o trailing stop não estiverem definidos para este símbolo
+         // (O aviso de parâmetros não encontrados já é logado por GetSymbolRiskParams)
+         // Poderíamos logar aqui se riskParams foi encontrado mas trailingStopPoints <= 0, se necessário.
+         // if(g_riskManager.GetSymbolRiskParams(positionSymbol, riskParams) && riskParams.trailingStopPoints <= 0 && g_logger) {
+         //    g_logger.Debug("Trailing stop não configurado (<=0) para " + positionSymbol);
+         // }
+      }
+      // --- FIM DA CORREÇÃO MODULAR ---
+      
+      // Adicionar outras lógicas de gerenciamento aqui (ex: fechamento parcial)
+      // ...
+   }
+   // --- FIM DA IMPLEMENTAÇÃO DO TRAILING STOP ---
+   
+   // Log apenas se houver posições gerenciadas
+   if(managedPositions > 0 && g_logger != NULL) {
+      g_logger.Debug(StringFormat("Gerenciando %d posições abertas (EA Magic: %d)", managedPositions, eaMagicNumber));
    }
 }
 

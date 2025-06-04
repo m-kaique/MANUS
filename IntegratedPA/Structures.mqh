@@ -1,5 +1,8 @@
+#ifndef STRUCTURES_MQH_
+#define STRUCTURES_MQH_
+
 //+------------------------------------------------------------------+
-//|                                                  Structures.mqh |
+//|                                                 Structures.mqh ||
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -172,3 +175,6 @@ struct MarketState {
       lastPhaseChange = 0;
    }
 };
+
+
+#endif // STRUCTURES_MQH_

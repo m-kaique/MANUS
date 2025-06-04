@@ -1,5 +1,8 @@
+#ifndef LOGGER_MQH_
+#define LOGGER_MQH_
+
 //+------------------------------------------------------------------+
-//|                                                     Logger.mqh |
+//|                                                   Logger.mqh | |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -403,3 +406,6 @@ void CLogger::SendAlert(string message, bool notifyTerminal = true, bool sendEma
    // Registrar alerta no log
    Info("ALERT: " + message);
 }
+
+
+#endif // LOGGER_MQH_

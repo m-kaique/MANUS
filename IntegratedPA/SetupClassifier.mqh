@@ -1,5 +1,8 @@
+#ifndef SETUPCLASSIFIER_MQH_
+#define SETUPCLASSIFIER_MQH_
+
 //+------------------------------------------------------------------+
-//|                                            SetupClassifier.mqh |
+//|                                          SetupClassifier.mqh | |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -666,3 +669,5 @@ double CSetupClassifier::CalculateSpreadMultiple(string symbol, double currentSp
    
    return (avgSpread > 0) ? currentSpread / avgSpread : 1.0;
 }
+
+#endif // SETUPCLASSIFIER_MQH_

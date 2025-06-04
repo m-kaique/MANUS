@@ -1,6 +1,9 @@
 
+#ifndef SIGNALENGINE_MQH_
+#define SIGNALENGINE_MQH_
+
 //+------------------------------------------------------------------+
-//|                                              SignalEngine.mqh |
+//|                                             SignalEngine.mqh |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
@@ -1222,3 +1225,5 @@ void CSignalEngine::SetCachedValidation(string symbol, ENUM_TIMEFRAMES timeframe
    m_symbolCache[size].lastValidation = TimeCurrent();
    m_symbolCache[size].validitySeconds = 300; // 5 minutos
 }
+
+#endif // SIGNALENGINE_MQH_
