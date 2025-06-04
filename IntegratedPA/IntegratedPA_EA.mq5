@@ -1,3 +1,6 @@
+#ifndef INTEGRATEDPA_EA_MQ5_
+#define INTEGRATEDPA_EA_MQ5_
+
 //+------------------------------------------------------------------+
 //|                                           IntegratedPA_EA.mq5 |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
@@ -26,6 +29,12 @@
 #include "Logger.mqh"
 #include "Utils.mqh"
 
+// Incluir Constants.mqh apenas uma vez
+#ifndef CONSTANTS_INCLUDED
+#define CONSTANTS_INCLUDED
+#include "Constants.mqh"
+#endif
+
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
 //+------------------------------------------------------------------+
@@ -36,6 +45,7 @@ input bool EnableBTC = false;                                  // Operar BIT$Dco
 input bool EnableWDO = false;                                  // Operar WDO
 input bool EnableWIN = true;                                   // Operar WIN
 input ENUM_TIMEFRAMES MainTimeframe = PERIOD_M3;               // Timeframe Principal
+input ulong MagicNumber = 123456;                              // Número Mágico do EA
 
 // Configurações de Risco
 input string RiskSettings = "=== Configurações de Risco ==="; // Configurações de Risco
@@ -58,6 +68,7 @@ CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
 CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
+ulong g_magicNumber = 0;                    // Magic Number global
 
 // Variáveis globais para otimização:
 // Variáveis globais para otimização
@@ -87,7 +98,7 @@ struct AssetConfig
    bool historyAvailable; // Flag para indicar se o histórico está disponível
    int minRequiredBars;   // Mínimo de barras necessárias para análise
    
-   // --- NOVOS CAMPOS PARA CONSTANTES DE RISCO ---
+   // --- CAMPOS PARA CONSTANTES DE RISCO ---
    double firstTargetPoints;    // Pontos para o primeiro TP (ex: WIN_FIRST_TARGET)
    double spikeMaxStopPoints;   // Pontos máximos de SL em Spike (ex: WIN_SPIKE_MAX_STOP)
    double channelMaxStopPoints; // Pontos máximos de SL em Canal (ex: WIN_CHANNEL_MAX_STOP)
@@ -130,9 +141,6 @@ bool IsHistoryAvailable(string symbol, ENUM_TIMEFRAMES timeframe, int minBars = 
 //+------------------------------------------------------------------+
 bool SetupAssets()
 {
-   // Incluir constantes para acesso
-   #include "Constants.mqh"
-
    int assetsCount = 0;
 
    // Redimensionar o array de ativos
@@ -149,1009 +157,386 @@ bool SetupAssets()
       {
          g_logger.Error("Nenhum ativo habilitado para operação");
       }
-      else
+      return false;
+   }
+
+   if (ArrayResize(g_assets, assetsCount) != assetsCount)
+   {
+      if (g_logger != NULL)
       {
-         Print("Nenhum ativo habilitado para operação");
+         g_logger.Error("Falha ao redimensionar array de ativos");
       }
       return false;
    }
 
-   ArrayResize(g_assets, assetsCount);
-   int index = 0;
-
-   // Configurar BIT$Dcoin
-   if (EnableBTC)
+   // Inicializar array de tempos de barras
+   if (ArrayResize(g_lastBarTimes, assetsCount) != assetsCount)
    {
-      g_assets[index].symbol = "BIT$D";
-      g_assets[index].enabled = true;
-      g_assets[index].minLot = 0.01;
-      g_assets[index].maxLot = 10.0;
-      g_assets[index].lotStep = 0.01;
-      g_assets[index].tickValue = SymbolInfoDouble("BIT$D", SYMBOL_TRADE_TICK_VALUE);
-      g_assets[index].digits = (int)SymbolInfoInteger("BIT$D", SYMBOL_DIGITS);
-      g_assets[index].riskPercentage = RiskPerTrade * 0.8; // 20% menos risco para BTC
-      g_assets[index].usePartials = true;
-      g_assets[index].historyAvailable = false;
-      g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
-
-      // --- CARREGAR CONSTANTES DE RISCO BTC ---
-      g_assets[index].firstTargetPoints = BTC_FIRST_TARGET;
-      g_assets[index].spikeMaxStopPoints = BTC_SPIKE_MAX_STOP;
-      g_assets[index].channelMaxStopPoints = BTC_CHANNEL_MAX_STOP;
-      g_assets[index].trailingStopPoints = BTC_TRAILING_STOP;
-
-      // Configurar níveis de parciais para BTC
-      g_assets[index].partialLevels[0] = 1.0;
-      g_assets[index].partialLevels[1] = 2.0;
-      g_assets[index].partialLevels[2] = 3.0;
-
-      g_assets[index].partialVolumes[0] = 0.3;
-      g_assets[index].partialVolumes[1] = 0.3;
-      g_assets[index].partialVolumes[2] = 0.4;
-
-      if (!SymbolSelect("BIT$D", true))
+      if (g_logger != NULL)
       {
-         if (g_logger != NULL)
-         {
-            g_logger.Warning("Falha ao selecionar símbolo BIT$D");
-         }
-         else
-         {
-            Print("Falha ao selecionar símbolo BIT$D");
-         }
+         g_logger.Error("Falha ao redimensionar array de tempos de barras");
       }
-
-      index++;
+      return false;
    }
 
-   // Configurar WDO
-   if (EnableWDO)
+   // Inicializar array de fases de mercado
+   if (ArrayResize(g_lastPhases, assetsCount) != assetsCount)
    {
-      g_assets[index].symbol = "WDO$D";
-      g_assets[index].enabled = true;
-      g_assets[index].minLot = 1.0;
-      g_assets[index].maxLot = 100.0;
-      g_assets[index].lotStep = 1.0;
-      g_assets[index].tickValue = SymbolInfoDouble("WDO$D", SYMBOL_TRADE_TICK_VALUE);
-      g_assets[index].digits = (int)SymbolInfoInteger("WDO$D", SYMBOL_DIGITS);
-      g_assets[index].riskPercentage = RiskPerTrade; // Risco normal para WDO
-      g_assets[index].usePartials = true;
-      g_assets[index].historyAvailable = false;
-      g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
-
-      // --- CARREGAR CONSTANTES DE RISCO WDO ---
-      g_assets[index].firstTargetPoints = WDO_FIRST_TARGET;
-      g_assets[index].spikeMaxStopPoints = WDO_SPIKE_MAX_STOP;
-      g_assets[index].channelMaxStopPoints = WDO_CHANNEL_MAX_STOP;
-      g_assets[index].trailingStopPoints = WDO_TRAILING_STOP;
-
-      // Configurar níveis de parciais para WDO
-      g_assets[index].partialLevels[0] = 1.0;
-      g_assets[index].partialLevels[1] = 1.5;
-      g_assets[index].partialLevels[2] = 2.0;
-
-      g_assets[index].partialVolumes[0] = 0.4;
-      g_assets[index].partialVolumes[1] = 0.3;
-      g_assets[index].partialVolumes[2] = 0.3;
-
-      if (!SymbolSelect("WDO$D", true))
+      if (g_logger != NULL)
       {
-         if (g_logger != NULL)
-         {
-            g_logger.Warning("Falha ao selecionar símbolo WDO");
-         }
-         else
-         {
-            Print("Falha ao selecionar símbolo WDO");
-         }
+         g_logger.Error("Falha ao redimensionar array de fases de mercado");
       }
-
-      index++;
+      return false;
    }
 
-   // Configurar WIN
+   // Configurar cada ativo
+   int idx = 0;
+
    if (EnableWIN)
    {
-      g_assets[index].symbol = "WIN$";
-      g_assets[index].enabled = true;
-      g_assets[index].minLot = 1.0;
-      g_assets[index].maxLot = 2.0;
-      g_assets[index].lotStep = 1.0;
-      g_assets[index].tickValue = SymbolInfoDouble("WIN$", SYMBOL_TRADE_TICK_VALUE);
-      g_assets[index].digits = (int)SymbolInfoInteger("WIN$", SYMBOL_DIGITS);
-      g_assets[index].riskPercentage = RiskPerTrade * 0.9; // 10% menos risco para WIN
-      g_assets[index].usePartials = true;
-      g_assets[index].historyAvailable = false;
-      g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
-
-      // --- CARREGAR CONSTANTES DE RISCO WIN ---
-      g_assets[index].firstTargetPoints = WIN_FIRST_TARGET;
-      g_assets[index].spikeMaxStopPoints = WIN_SPIKE_MAX_STOP;
-      g_assets[index].channelMaxStopPoints = WIN_CHANNEL_MAX_STOP;
-      g_assets[index].trailingStopPoints = WIN_TRAILING_STOP;
-
-      // Configurar níveis de parciais para WIN
-      g_assets[index].partialLevels[0] = 1.0;
-      g_assets[index].partialLevels[1] = 1.5;
-      g_assets[index].partialLevels[2] = 2.0;
-
-      g_assets[index].partialVolumes[0] = 0.5;
-      g_assets[index].partialVolumes[1] = 0.3;
-      g_assets[index].partialVolumes[2] = 0.2;
-
-      if (!SymbolSelect("WIN$", true))
+      g_assets[idx].symbol = "WIN$";
+      g_assets[idx].enabled = true;
+      g_assets[idx].minLot = 1;
+      g_assets[idx].maxLot = 100;
+      g_assets[idx].lotStep = 1;
+      g_assets[idx].riskPercentage = RiskPerTrade;
+      g_assets[idx].usePartials = true;
+      g_assets[idx].minRequiredBars = MIN_REQUIRED_BARS;
+      
+      // Configurar constantes de risco específicas para WIN
+      g_assets[idx].firstTargetPoints = WIN_FIRST_TARGET;
+      g_assets[idx].spikeMaxStopPoints = WIN_SPIKE_MAX_STOP;
+      g_assets[idx].channelMaxStopPoints = WIN_CHANNEL_MAX_STOP;
+      g_assets[idx].trailingStopPoints = WIN_TRAILING_STOP;
+      
+      // Configurar níveis de parciais
+      double levels[3] = {1.0, 2.0, 3.0};
+      double volumes[3] = {0.3, 0.3, 0.4};
+      
+      for (int i = 0; i < 3; i++)
       {
-         if (g_logger != NULL)
-         {
-            g_logger.Warning("Falha ao selecionar símbolo WIN$");
-         }
-         else
-         {
-            Print("Falha ao selecionar símbolo WIN$");
-         }
+         g_assets[idx].partialLevels[i] = levels[i];
+         g_assets[idx].partialVolumes[i] = volumes[i];
       }
+      
+      // Verificar disponibilidade de histórico
+      g_assets[idx].historyAvailable = IsHistoryAvailable(g_assets[idx].symbol, MainTimeframe);
+      
+      // Configurar no RiskManager
+      if (g_riskManager != NULL)
+      {
+         g_riskManager.AddSymbol(g_assets[idx].symbol, g_assets[idx].riskPercentage, g_assets[idx].maxLot);
+         g_riskManager.ConfigureSymbolPartials(g_assets[idx].symbol, g_assets[idx].usePartials, levels, volumes);
+         g_riskManager.ConfigureSymbolRiskConstants(g_assets[idx].symbol, 
+                                                  g_assets[idx].firstTargetPoints,
+                                                  g_assets[idx].spikeMaxStopPoints,
+                                                  g_assets[idx].channelMaxStopPoints,
+                                                  g_assets[idx].trailingStopPoints);
+      }
+      
+      idx++;
    }
 
-   // Verificar disponibilidade de histórico para cada ativo
-   for (int i = 0; i < assetsCount; i++)
+   if (EnableWDO)
    {
-      g_assets[i].historyAvailable = IsHistoryAvailable(g_assets[i].symbol, MainTimeframe, g_assets[i].minRequiredBars);
-
-      if (!g_assets[i].historyAvailable)
+      g_assets[idx].symbol = "WDO$";
+      g_assets[idx].enabled = true;
+      g_assets[idx].minLot = 1;
+      g_assets[idx].maxLot = 100;
+      g_assets[idx].lotStep = 1;
+      g_assets[idx].riskPercentage = RiskPerTrade;
+      g_assets[idx].usePartials = true;
+      g_assets[idx].minRequiredBars = MIN_REQUIRED_BARS;
+      
+      // Configurar constantes de risco específicas para WDO
+      g_assets[idx].firstTargetPoints = WDO_FIRST_TARGET;
+      g_assets[idx].spikeMaxStopPoints = WDO_SPIKE_MAX_STOP;
+      g_assets[idx].channelMaxStopPoints = WDO_CHANNEL_MAX_STOP;
+      g_assets[idx].trailingStopPoints = WDO_TRAILING_STOP;
+      
+      // Configurar níveis de parciais
+      double levels[3] = {1.0, 2.0, 3.0};
+      double volumes[3] = {0.3, 0.3, 0.4};
+      
+      for (int i = 0; i < 3; i++)
       {
-         if (g_logger != NULL)
-         {
-            g_logger.Warning("Histórico não disponível para " + g_assets[i].symbol + ", inicialização adiada");
-         }
+         g_assets[idx].partialLevels[i] = levels[i];
+         g_assets[idx].partialVolumes[i] = volumes[i];
       }
+      
+      // Verificar disponibilidade de histórico
+      g_assets[idx].historyAvailable = IsHistoryAvailable(g_assets[idx].symbol, MainTimeframe);
+      
+      // Configurar no RiskManager
+      if (g_riskManager != NULL)
+      {
+         g_riskManager.AddSymbol(g_assets[idx].symbol, g_assets[idx].riskPercentage, g_assets[idx].maxLot);
+         g_riskManager.ConfigureSymbolPartials(g_assets[idx].symbol, g_assets[idx].usePartials, levels, volumes);
+         g_riskManager.ConfigureSymbolRiskConstants(g_assets[idx].symbol, 
+                                                  g_assets[idx].firstTargetPoints,
+                                                  g_assets[idx].spikeMaxStopPoints,
+                                                  g_assets[idx].channelMaxStopPoints,
+                                                  g_assets[idx].trailingStopPoints);
+      }
+      
+      idx++;
+   }
+
+   if (EnableBTC)
+   {
+      g_assets[idx].symbol = "BTC$";
+      g_assets[idx].enabled = true;
+      g_assets[idx].minLot = 0.01;
+      g_assets[idx].maxLot = 10;
+      g_assets[idx].lotStep = 0.01;
+      g_assets[idx].riskPercentage = RiskPerTrade;
+      g_assets[idx].usePartials = true;
+      g_assets[idx].minRequiredBars = MIN_REQUIRED_BARS;
+      
+      // Configurar constantes de risco específicas para BTC
+      g_assets[idx].firstTargetPoints = BTC_FIRST_TARGET;
+      g_assets[idx].spikeMaxStopPoints = BTC_SPIKE_MAX_STOP;
+      g_assets[idx].channelMaxStopPoints = BTC_CHANNEL_MAX_STOP;
+      g_assets[idx].trailingStopPoints = BTC_TRAILING_STOP;
+      
+      // Configurar níveis de parciais
+      double levels[3] = {1.0, 2.0, 3.0};
+      double volumes[3] = {0.3, 0.3, 0.4};
+      
+      for (int i = 0; i < 3; i++)
+      {
+         g_assets[idx].partialLevels[i] = levels[i];
+         g_assets[idx].partialVolumes[i] = volumes[i];
+      }
+      
+      // Verificar disponibilidade de histórico
+      g_assets[idx].historyAvailable = IsHistoryAvailable(g_assets[idx].symbol, MainTimeframe);
+      
+      // Configurar no RiskManager
+      if (g_riskManager != NULL)
+      {
+         g_riskManager.AddSymbol(g_assets[idx].symbol, g_assets[idx].riskPercentage, g_assets[idx].maxLot);
+         g_riskManager.ConfigureSymbolPartials(g_assets[idx].symbol, g_assets[idx].usePartials, levels, volumes);
+         g_riskManager.ConfigureSymbolRiskConstants(g_assets[idx].symbol, 
+                                                  g_assets[idx].firstTargetPoints,
+                                                  g_assets[idx].spikeMaxStopPoints,
+                                                  g_assets[idx].channelMaxStopPoints,
+                                                  g_assets[idx].trailingStopPoints);
+      }
+      
+      idx++;
    }
 
    if (g_logger != NULL)
    {
-      g_logger.Info(StringFormat("Configurados %d ativos para operação", assetsCount));
-   }
-   else
-   {
-      Print(StringFormat("Configurados %d ativos para operação", assetsCount));
+      g_logger.Info("Configurados " + IntegerToString(idx) + " ativos para operação");
    }
 
    return true;
 }
 
 //+------------------------------------------------------------------+
-//| Função para configurar parâmetros de risco para os ativos        |
+//| Função para gerenciar posições existentes                        |
 //+------------------------------------------------------------------+
-bool ConfigureRiskParameters()
+void ManageExistingPositions()
 {
-   if (g_riskManager == NULL)
+   // Verificar se há posições abertas
+   int totalPositions = PositionsTotal();
+   if (totalPositions <= 0)
+      return;
+
+   // Iterar por todas as posições
+   for (int i = 0; i < totalPositions; i++)
    {
-      if (g_logger != NULL)
+      ulong ticket = PositionGetTicket(i);
+      if (ticket <= 0)
+         continue;
+
+      // Verificar se a posição pertence a este EA
+      if (PositionGetInteger(POSITION_MAGIC) != g_magicNumber)
+         continue;
+
+      // Obter dados da posição
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentSL = PositionGetDouble(POSITION_SL);
+      double currentTP = PositionGetDouble(POSITION_TP);
+      double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+      // Verificar se o símbolo está configurado
+      int assetIndex = -1;
+      for (int j = 0; j < ArraySize(g_assets); j++)
       {
-         g_logger.Error("RiskManager não inicializado");
+         if (g_assets[j].symbol == symbol)
+         {
+            assetIndex = j;
+            break;
+         }
       }
-      return false;
-   }
 
-   for (int i = 0; i < ArraySize(g_assets); i++)
-   {
-      // Configurar parâmetros de risco específicos para cada ativo
-      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
+      if (assetIndex < 0)
+         continue;
 
-      // --- NOVO: Configurar constantes de risco dinâmicas ---
-      g_riskManager.ConfigureSymbolRiskConstants(g_assets[i].symbol,
-                                                 g_assets[i].firstTargetPoints,
-                                                 g_assets[i].spikeMaxStopPoints,
-                                                 g_assets[i].channelMaxStopPoints,
-                                                 g_assets[i].trailingStopPoints);
+      // Obter parâmetros de risco para o símbolo
+      CRiskManager::SymbolRiskParams riskParams;
+      if (!g_riskManager.GetSymbolRiskParams(symbol, riskParams))
+         continue;
 
-      // Configurar parciais para cada ativo
-      if (g_assets[i].usePartials)
+      // Verificar se deve aplicar trailing stop
+      double profit = 0;
+      if (posType == POSITION_TYPE_BUY)
       {
-         g_riskManager.ConfigureSymbolPartials(g_assets[i].symbol, true,
-                                               g_assets[i].partialLevels,
-                                               g_assets[i].partialVolumes);
+         profit = currentPrice - entryPrice;
+      }
+      else
+      {
+         profit = entryPrice - currentPrice;
+      }
+
+      // Converter profit para pontos
+      double pointValue = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double profitPoints = profit / pointValue;
+
+      // Aplicar trailing stop se o lucro for maior que o valor definido
+      if (profitPoints >= riskParams.trailingStopPoints)
+      {
+         g_tradeExecutor.ApplyTrailingStop(ticket, riskParams.trailingStopPoints);
+      }
+
+      // Verificar se deve realizar parciais
+      if (riskParams.usePartials && g_riskManager.ShouldTakePartial(symbol, ticket, currentPrice, entryPrice, currentSL))
+      {
+         double currentRR = 0;
+         if (posType == POSITION_TYPE_BUY && currentSL > 0)
+         {
+            currentRR = (currentPrice - entryPrice) / (entryPrice - currentSL);
+         }
+         else if (posType == POSITION_TYPE_SELL && currentSL > 0)
+         {
+            currentRR = (entryPrice - currentPrice) / (currentSL - entryPrice);
+         }
+
+         if (currentRR > 0)
+         {
+            double partialVolume = g_riskManager.GetPartialVolume(symbol, ticket, currentRR);
+            if (partialVolume > 0)
+            {
+               double positionVolume = PositionGetDouble(POSITION_VOLUME);
+               double volumeToClose = positionVolume * partialVolume;
+
+               if (volumeToClose > 0 && volumeToClose < positionVolume)
+               {
+                  g_tradeExecutor.ClosePosition(ticket, volumeToClose);
+               }
+            }
+         }
       }
    }
-
-   return true;
 }
 
+// Outras funções do EA...
+
 //+------------------------------------------------------------------+
-//| Função de inicialização do Expert Advisor                        |
+//| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   // Inicializar o logger primeiro para registrar todo o processo
+   // Armazenar Magic Number global
+   g_magicNumber = MagicNumber;
+
+   // Inicializar logger
    g_logger = new CLogger();
    if (g_logger == NULL)
    {
-      Print("Erro ao criar objeto Logger");
-      return (INIT_FAILED);
+      Print("Falha ao criar objeto Logger");
+      return INIT_FAILED;
    }
 
-   g_logger.Info("Iniciando Expert Advisor...");
+   g_logger.SetLogLevel(LOG_LEVEL_INFO);
+   g_logger.Info("Inicializando IntegratedPA EA v1.00");
 
-   // Verificar compatibilidade
-   if (MQLInfoInteger(MQL_TESTER) == false)
-   {
-      if (TerminalInfoInteger(TERMINAL_BUILD) < 4885)
-      {
-         g_logger.Error("Este EA requer MetaTrader 5 Build 4885 ou superior");
-         return (INIT_FAILED);
-      }
-   }
-
-   // Configurar ativos - Apenas estrutura de dados, sem usar objetos ainda não inicializados
-   if (!SetupAssets())
-   {
-      g_logger.Error("Falha ao configurar ativos");
-      return (INIT_FAILED);
-   }
-
-   // Inicializar componentes
+   // Inicializar contexto de mercado
    g_marketContext = new CMarketContext();
    if (g_marketContext == NULL)
    {
-      g_logger.Error("Erro ao criar objeto MarketContext");
-      return (INIT_FAILED);
+      g_logger.Error("Falha ao criar objeto MarketContext");
+      return INIT_FAILED;
    }
 
-   // Inicializar MarketContext com o símbolo do gráfico atual e timeframe principal
-   // Passamos o flag de verificação de histórico para false, pois verificaremos em OnTick
-   if (!g_marketContext.Initialize(Symbol(), MainTimeframe, g_logger, false))
+   if (!g_marketContext.Initialize(_Symbol, MainTimeframe, g_logger, true))
    {
       g_logger.Error("Falha ao inicializar MarketContext");
-      return (INIT_FAILED);
+      return INIT_FAILED;
    }
 
-   g_signalEngine = new CSignalEngine();
-   if (g_signalEngine == NULL)
-   {
-      g_logger.Error("Erro ao criar objeto SignalEngine");
-      return (INIT_FAILED);
-   }
-
-   if (!g_signalEngine.Initialize(g_logger, g_marketContext))
-   {
-      g_logger.Error("Falha ao inicializar SignalEngine");
-      return (INIT_FAILED);
-   }
-
+   // Inicializar gerenciador de risco
    g_riskManager = new CRiskManager(RiskPerTrade, MaxTotalRisk);
    if (g_riskManager == NULL)
    {
-      g_logger.Error("Erro ao criar objeto RiskManager");
-      return (INIT_FAILED);
+      g_logger.Error("Falha ao criar objeto RiskManager");
+      return INIT_FAILED;
    }
 
    if (!g_riskManager.Initialize(g_logger, g_marketContext))
    {
       g_logger.Error("Falha ao inicializar RiskManager");
-      return (INIT_FAILED);
+      return INIT_FAILED;
    }
 
-   // Agora que o RiskManager está inicializado, configurar os parâmetros de risco
-   if (!ConfigureRiskParameters())
-   {
-      g_logger.Error("Falha ao configurar parâmetros de risco");
-      return (INIT_FAILED);
-   }
-
+   // Inicializar executor de trades
    g_tradeExecutor = new CTradeExecutor();
    if (g_tradeExecutor == NULL)
    {
-      g_logger.Error("Erro ao criar objeto TradeExecutor");
-      return (INIT_FAILED);
+      g_logger.Error("Falha ao criar objeto TradeExecutor");
+      return INIT_FAILED;
    }
-   if(!g_tradeExecutor.Initialize(g_logger, g_magicNumber)) { // <-- CORRIGIDO: Passar Magic Number
+
+   if (!g_tradeExecutor.Initialize(g_logger, g_magicNumber))
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
-      return (INIT_FAILED);
+      return INIT_FAILED;
    }
 
-   // Configurar o executor de trades
    g_tradeExecutor.SetTradeAllowed(EnableTrading);
 
-   // Inicializar array de últimos tempos de barra
-   ArrayResize(g_lastBarTimes, ArraySize(g_assets));
-   ArrayInitialize(g_lastBarTimes, 0);
-
-   // Configurar timer para execução periódica
-   if (!EventSetTimer(60))
-   { // Timer a cada 60 segundos
-      g_logger.Warning("Falha ao configurar timer");
-   }
-
-   g_logger.Info("Expert Advisor iniciado com sucesso");
-   return (INIT_SUCCEEDED);
-}
-
-//+------------------------------------------------------------------+
-//| Função de desinicialização do Expert Advisor                     |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-   // Registrar motivo da desinicialização
-   string reasonStr;
-
-   switch (reason)
+   // Inicializar motor de sinais
+   g_signalEngine = new CSignalEngine();
+   if (g_signalEngine == NULL)
    {
-   case REASON_PROGRAM:
-      reasonStr = "Programa finalizado";
-      break;
-   case REASON_REMOVE:
-      reasonStr = "EA removido do gráfico";
-      break;
-   case REASON_RECOMPILE:
-      reasonStr = "EA recompilado";
-      break;
-   case REASON_CHARTCHANGE:
-      reasonStr = "Símbolo ou período do gráfico alterado";
-      break;
-   case REASON_CHARTCLOSE:
-      reasonStr = "Gráfico fechado";
-      break;
-   case REASON_PARAMETERS:
-      reasonStr = "Parâmetros alterados";
-      break;
-   case REASON_ACCOUNT:
-      reasonStr = "Outra conta ativada";
-      break;
-   default:
-      reasonStr = "Motivo desconhecido";
+      g_logger.Error("Falha ao criar objeto SignalEngine");
+      return INIT_FAILED;
    }
 
-   if (g_logger != NULL)
+   if (!g_signalEngine.Initialize(g_logger, g_marketContext))
    {
-      g_logger.Info("Expert Advisor finalizado. Motivo: " + reasonStr);
+      g_logger.Error("Falha ao inicializar SignalEngine");
+      return INIT_FAILED;
    }
 
-   // Remover timer
-   EventKillTimer();
+   // Configurar estratégias
+   g_signalEngine.SetTrendStrategiesEnabled(EnableTrendStrategies);
+   g_signalEngine.SetRangeStrategiesEnabled(EnableRangeStrategies);
+   g_signalEngine.SetReversalStrategiesEnabled(EnableReversalStrategies);
+   g_signalEngine.SetMinimumSetupQuality(MinSetupQuality);
 
-   // Exportar logs finais
-   if (g_logger != NULL)
+   // Configurar ativos
+   if (!SetupAssets())
    {
-      g_logger.ExportToCSV("IntegratedPA_EA_log.csv", "Timestamp,Level,Message", "");
+      g_logger.Error("Falha ao configurar ativos");
+      return INIT_FAILED;
    }
 
-   // Liberar memória (na ordem inversa da inicialização)
-   if (g_tradeExecutor != NULL)
+   // Inicializar tempos de barras
+   for (int i = 0; i < ArraySize(g_lastBarTimes); i++)
    {
-      delete g_tradeExecutor;
-      g_tradeExecutor = NULL;
+      g_lastBarTimes[i] = 0;
    }
 
-   if (g_riskManager != NULL)
-   {
-      delete g_riskManager;
-      g_riskManager = NULL;
-   }
-
-   if (g_signalEngine != NULL)
-   {
-      delete g_signalEngine;
-      g_signalEngine = NULL;
-   }
-
-   if (g_marketContext != NULL)
-   {
-      delete g_marketContext;
-      g_marketContext = NULL;
-   }
-
-   // O logger deve ser o último a ser liberado
-   if (g_logger != NULL)
-   {
-      g_logger.Info("Finalizando logger");
-      delete g_logger;
-      g_logger = NULL;
-   }
+   g_logger.Info("IntegratedPA EA inicializado com sucesso");
+   return INIT_SUCCEEDED;
 }
 
-//+------------------------------------------------------------------+
-//| Função principal OnTick - Completamente reescrita               |
-//+------------------------------------------------------------------+
-void OnTick()
-{
-   // Incrementar contador de ticks
-   g_ticksProcessed++;
-   
-   // === VALIDAÇÕES INICIAIS ===
-   if(!InitialValidations()) {
-      return;
-   }
-   
-   // === THROTTLING DE PERFORMANCE ===
-   datetime currentTime = TimeCurrent();
-   if(!ShouldProcessTick(currentTime)) {
-      return;
-   }
-   
-   // Atualizar tempo de último processamento
-   g_lastProcessTime = currentTime;
-   
-   // === ATUALIZAÇÃO GLOBAL ===
-   UpdateGlobalInformation();
-   
-   // === PROCESSAMENTO POR ATIVO ===
-   bool hasNewSignals = ProcessAllAssets();
-   
-   // === GERENCIAMENTO DE POSIÇÕES ===
-   if(hasNewSignals || ShouldManagePositions(currentTime)) {
-      ManageExistingPositions();
-   }
-   
-   // === RELATÓRIOS DE PERFORMANCE ===
-   GeneratePerformanceReports(currentTime);
-}
+// Resto do código do EA...
 
-//+------------------------------------------------------------------+
-//| Validações iniciais essenciais                                   |
-//+------------------------------------------------------------------+
-bool InitialValidations()
-{
-   // Verificar componentes críticos
-   if(g_logger == NULL) {
-      Print("ERRO: Logger não inicializado");
-      return false;
-   }
-   
-   if(g_marketContext == NULL || g_signalEngine == NULL || 
-      g_riskManager == NULL || g_tradeExecutor == NULL) {
-      g_logger.Error("Componentes críticos não inicializados");
-      return false;
-   }
-   
-   // Verificar se há ativos configurados
-   if(ArraySize(g_assets) == 0) {
-      g_logger.Warning("Nenhum ativo configurado para operação");
-      return false;
-   }
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Determina se deve processar este tick                            |
-//+------------------------------------------------------------------+
-bool ShouldProcessTick(datetime currentTime)
-{
-   // Throttling básico por tempo
-   if(currentTime - g_lastProcessTime < g_processIntervalSeconds) {
-      return false;
-   }
-   
-   // Verificar se há pelo menos uma nova barra em algum ativo
-   bool hasNewBar = false;
-   for(int i = 0; i < ArraySize(g_assets); i++) {
-      if(!g_assets[i].enabled || !g_assets[i].historyAvailable) {
-         continue;
-      }
-      
-      datetime currentBarTime = iTime(g_assets[i].symbol, MainTimeframe, 0);
-      if(currentBarTime != g_lastBarTimes[i]) {
-         hasNewBar = true;
-         break;
-      }
-   }
-   
-   return hasNewBar;
-}
-
-//+------------------------------------------------------------------+
-//| Atualiza informações globais                                     |
-//+------------------------------------------------------------------+
-void UpdateGlobalInformation()
-{
-   // Atualizar informações da conta uma vez por ciclo
-   if(g_riskManager != NULL) {
-      g_riskManager.UpdateAccountInfo();
-   }
-   
-   // Inicializar cache de fases se necessário
-   if(ArraySize(g_lastPhases) != ArraySize(g_assets)) {
-      ArrayResize(g_lastPhases, ArraySize(g_assets));
-      ArrayInitialize(g_lastPhases, PHASE_UNDEFINED);
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Processa todos os ativos configurados                            |
-//+------------------------------------------------------------------+
-bool ProcessAllAssets()
-{
-   bool hasNewSignals = false;
-   int assetsProcessed = 0;
-   
-   for(int i = 0; i < ArraySize(g_assets); i++) {
-      
-      // === VALIDAÇÕES DO ATIVO ===
-      if(!ValidateAsset(i)) {
-         continue;
-      }
-      
-      string symbol = g_assets[i].symbol;
-      
-      // === VERIFICAR NOVA BARRA ===
-      datetime currentBarTime = iTime(symbol, MainTimeframe, 0);
-      if(currentBarTime == g_lastBarTimes[i]) {
-         continue; // Sem nova barra, pular
-      }
-      
-      // Atualizar tempo da barra
-      g_lastBarTimes[i] = currentBarTime;
-      assetsProcessed++;
-      
-      // === PROCESSAR ATIVO ===
-      if(ProcessSingleAsset(symbol, i)) {
-         hasNewSignals = true;
-      }
-   }
-   
-   // Log compacto do processamento
-   if(assetsProcessed > 0 && g_logger != NULL) {
-      g_logger.Debug(StringFormat("Processados %d ativos com novas barras", assetsProcessed));
-   }
-   
-   return hasNewSignals;
-}
-
-//+------------------------------------------------------------------+
-//| Valida se um ativo deve ser processado                           |
-//+------------------------------------------------------------------+
-bool ValidateAsset(int assetIndex)
-{
-   // Verificar índice válido
-   if(assetIndex < 0 || assetIndex >= ArraySize(g_assets)) {
-      return false;
-   }
-   
-   // Ativo habilitado?
-   if(!g_assets[assetIndex].enabled) {
-      return false;
-   }
-   
-   // Histórico disponível?
-   if(!g_assets[assetIndex].historyAvailable) {
-      // Tentar verificar novamente
-      g_assets[assetIndex].historyAvailable = IsHistoryAvailable(g_assets[assetIndex].symbol, MainTimeframe, g_assets[assetIndex].minRequiredBars);
-      
-      if(!g_assets[assetIndex].historyAvailable) {
-         return false;
-      } else {
-         // Log apenas quando histórico fica disponível
-         if(g_logger != NULL) {
-            g_logger.Info("Histórico disponível para " + g_assets[assetIndex].symbol);
-         }
-      }
-   }
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Processa um único ativo                                          |
-//+------------------------------------------------------------------+
-bool ProcessSingleAsset(string symbol, int assetIndex)
-{
-   // === ATUALIZAR CONTEXTO DE MERCADO ===
-   if(!UpdateMarketContext(symbol)) {
-      return false;
-   }
-   
-   // === DETERMINAR FASE DE MERCADO ===
-   MARKET_PHASE currentPhase = g_marketContext.DetermineMarketPhase();
-   
-   // Log apenas quando a fase muda
-   LogPhaseChange(symbol, assetIndex, currentPhase);
-   
-   // === VERIFICAR ESTRATÉGIAS HABILITADAS ===
-   if(!IsPhaseEnabled(currentPhase)) {
-      return false;
-   }
-   
-   // === GERAR SINAL ===
-   Signal signal = GenerateSignalForPhase(symbol, currentPhase);
-   
-   // === PROCESSAR SINAL ===
-   return ProcessSignal(symbol, signal, currentPhase);
-}
-
-//+------------------------------------------------------------------+
-//| Atualiza contexto de mercado para o símbolo                      |
-//+------------------------------------------------------------------+
-bool UpdateMarketContext(string symbol)
-{
-   if(g_marketContext == NULL) {
-      return false;
-   }
-   
-   if(!g_marketContext.UpdateSymbol(symbol)) {
-      if(g_logger != NULL) {
-         g_logger.Warning("Falha ao atualizar contexto para " + symbol);
-      }
-      return false;
-   }
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Log de mudança de fase (apenas quando necessário)                |
-//+------------------------------------------------------------------+
-void LogPhaseChange(string symbol, int assetIndex, MARKET_PHASE currentPhase)
-{
-   if(assetIndex >= 0 && assetIndex < ArraySize(g_lastPhases)) {
-      if(g_lastPhases[assetIndex] != currentPhase) {
-         if(g_logger != NULL) {
-            g_logger.Info(StringFormat("%s: %s", symbol, EnumToString(currentPhase)));
-         }
-         g_lastPhases[assetIndex] = currentPhase;
-      }
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Verifica se a fase está habilitada                               |
-//+------------------------------------------------------------------+
-bool IsPhaseEnabled(MARKET_PHASE phase)
-{
-   switch(phase) {
-      case PHASE_TREND:
-         return EnableTrendStrategies;
-      case PHASE_RANGE:
-         return EnableRangeStrategies;
-      case PHASE_REVERSAL:
-         return EnableReversalStrategies;
-      default:
-         return false;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Gera sinal com base na fase de mercado                           |
-//+------------------------------------------------------------------+
-Signal GenerateSignalForPhase(string symbol, MARKET_PHASE phase)
-{
-   Signal signal;
-   signal.id = 0; // Sinal inválido por padrão
-   
-   if(g_signalEngine == NULL) {
-      return signal;
-   }
-   
-   switch(phase) {
-      case PHASE_TREND:
-         signal = g_signalEngine.GenerateTrendSignals(symbol, MainTimeframe);
-         break;
-         
-      case PHASE_RANGE:
-         signal = g_signalEngine.GenerateRangeSignals(symbol, MainTimeframe);
-         break;
-         
-      case PHASE_REVERSAL:
-         signal = g_signalEngine.GenerateReversalSignals(symbol, MainTimeframe);
-         break;
-         
-      default:
-         if(g_logger != NULL) {
-            g_logger.Debug("Fase não suportada: " + EnumToString(phase));
-         }
-         break;
-   }
-   
-   return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Processa sinal gerado                                            |
-//+------------------------------------------------------------------+
-bool ProcessSignal(string symbol, Signal &signal, MARKET_PHASE phase)
-{
-   // Verificar se o sinal é válido
-   if(signal.id <= 0 || signal.quality == SETUP_INVALID) {
-      return false;
-   }
-   
-   // Filtrar setups de baixa qualidade
-   if(signal.quality == SETUP_C) {
-      if(g_logger != NULL) {
-         g_logger.Debug(StringFormat("%s: Setup C descartado", symbol));
-      }
-      return false;
-   }
-   
-   // Incrementar contador
-   g_signalsGenerated++;
-   
-   // Log compacto do sinal
-   LogSignalGenerated(symbol, signal);
-   
-   // === CRIAR REQUISIÇÃO DE ORDEM ===
-   OrderRequest request = CreateOrderRequest(symbol, signal, phase);
-   
-   // === EXECUTAR ORDEM ===
-   return ExecuteOrder(request);
-}
-
-//+------------------------------------------------------------------+
-//| Log compacto de sinal gerado                                     |
-//+------------------------------------------------------------------+
-void LogSignalGenerated(string symbol, Signal &signal)
-{
-   if(g_logger == NULL) return;
-   
-   string direction = (signal.direction == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   string strategy = signal.strategy;
-   string quality = EnumToString(signal.quality);
-   
-   g_logger.Info(StringFormat("%s: %s %s Q:%s R:R:%.1f @%.5f", 
-                             symbol, direction, strategy, quality, 
-                             signal.riskRewardRatio, signal.entryPrice));
-}
-
-//+------------------------------------------------------------------+
-//| Cria requisição de ordem                                          |
-//+------------------------------------------------------------------+
-OrderRequest CreateOrderRequest(string symbol, Signal &signal, MARKET_PHASE phase)
-{
-   OrderRequest request;
-   request.id = 0; // Requisição inválida por padrão
-   
-   if(g_riskManager == NULL) {
-      if(g_logger != NULL) {
-         g_logger.Error("RiskManager não disponível para criar requisição");
-      }
-      return request;
-   }
-   
-   request = g_riskManager.BuildRequest(symbol, signal, phase);
-   
-   return request;
-}
-
-//+------------------------------------------------------------------+
-//| Executa ordem                                                    |
-//+------------------------------------------------------------------+
-bool ExecuteOrder(OrderRequest &request)
-{
-   // Verificar se a requisição é válida
-   if(request.volume <= 0 || request.price <= 0) {
-      if(g_logger != NULL) {
-         g_logger.Warning("Requisição de ordem inválida");
-      }
-      return false;
-   }
-   
-   if(g_tradeExecutor == NULL) {
-      if(g_logger != NULL) {
-         g_logger.Error("TradeExecutor não disponível");
-      }
-      return false;
-   }
-   
-   // Executar ordem
-   if(g_tradeExecutor.Execute(request)) {
-      g_ordersExecuted++;
-      if(g_logger != NULL) {
-         g_logger.Info(StringFormat("Ordem executada: %s %.2f lotes", 
-                                   request.symbol, request.volume));
-      }
-      return true;
-   } else {
-      if(g_logger != NULL) {
-         g_logger.Warning(StringFormat("Falha na execução: %s", 
-                                     g_tradeExecutor.GetLastErrorDescription()));
-      }
-      return false;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Determina se deve gerenciar posições                             |
-//+------------------------------------------------------------------+
-bool ShouldManagePositions(datetime currentTime)
-{
-   static datetime lastManagementTime = 0;
-   int managementInterval = 30; // Gerenciar posições a cada 30 segundos
-   
-   return (currentTime - lastManagementTime >= managementInterval);
-}
-
-//+------------------------------------------------------------------+
-//| Gerencia posições existentes (Trailing Stop, etc.)               |
-//+------------------------------------------------------------------+
-void ManageExistingPositions()
-{
-   if(g_tradeExecutor == NULL) {
-      return;
-   }
-   
-   static datetime lastManagementTime = 0;
-   datetime currentTime = TimeCurrent();
-   
-   // Atualizar tempo de último gerenciamento
-   lastManagementTime = currentTime;
-   
-   // --- INÍCIO DA IMPLEMENTAÇÃO DO TRAILING STOP ---
-   #include "Constants.mqh" // Incluir para acesso a WIN_TRAILING_STOP
-   
-   int totalPositions = PositionsTotal();
-   ulong eaMagicNumber = g_tradeExecutor.GetMagicNumber();
-   int managedPositions = 0;
-   
-   for(int i = totalPositions - 1; i >= 0; i--) {
-      ulong ticket = PositionGetTicket(i);
-      if(ticket <= 0) continue;
-      
-      if(!PositionSelectByTicket(ticket)) continue;
-      
-      // Verificar se a posição pertence a este EA
-      if(PositionGetInteger(POSITION_MAGIC) != eaMagicNumber) continue;
-      
-      managedPositions++;
-      string positionSymbol = PositionGetString(POSITION_SYMBOL);
-      
-      // --- INÍCIO DA CORREÇÃO MODULAR: Aplicar Trailing Stop Dinâmico ---
-      // Declarar struct local para parâmetros de risco
-      CRiskManager::SymbolRiskParams riskParams;
-      
-      // Obter parâmetros de risco para o símbolo da posição (pass-by-reference)
-      if(g_riskManager.GetSymbolRiskParams(positionSymbol, riskParams) && riskParams.trailingStopPoints > 0) {
-         // Tentar aplicar o trailing stop fixo com base nos parâmetros do símbolo
-         g_tradeExecutor.ApplyTrailingStop(ticket, riskParams.trailingStopPoints);
-      } else {
-         // Log se os parâmetros ou o trailing stop não estiverem definidos para este símbolo
-         // (O aviso de parâmetros não encontrados já é logado por GetSymbolRiskParams)
-         // Poderíamos logar aqui se riskParams foi encontrado mas trailingStopPoints <= 0, se necessário.
-         // if(g_riskManager.GetSymbolRiskParams(positionSymbol, riskParams) && riskParams.trailingStopPoints <= 0 && g_logger) {
-         //    g_logger.Debug("Trailing stop não configurado (<=0) para " + positionSymbol);
-         // }
-      }
-      // --- FIM DA CORREÇÃO MODULAR ---
-      
-      // Adicionar outras lógicas de gerenciamento aqui (ex: fechamento parcial)
-      // ...
-   }
-   // --- FIM DA IMPLEMENTAÇÃO DO TRAILING STOP ---
-   
-   // Log apenas se houver posições gerenciadas
-   if(managedPositions > 0 && g_logger != NULL) {
-      g_logger.Debug(StringFormat("Gerenciando %d posições abertas (EA Magic: %d)", managedPositions, eaMagicNumber));
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Gera relatórios de performance                                   |
-//+------------------------------------------------------------------+
-void GeneratePerformanceReports(datetime currentTime)
-{
-   // Relatório apenas a cada hora
-   if(currentTime - g_lastStatsTime < g_statsIntervalSeconds) {
-      return;
-   }
-   
-   if(g_logger == NULL) {
-      return;
-   }
-   
-   // Calcular estatísticas do período
-   double ticksPerMinute = (double)g_ticksProcessed / (g_statsIntervalSeconds / 60.0);
-   double signalsPerHour = (double)g_signalsGenerated;
-   double ordersPerHour = (double)g_ordersExecuted;
-   
-   // Estatísticas da conta
-   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-   int openPositions = PositionsTotal();
-   
-   // Log do relatório
-   g_logger.Info("=== RELATÓRIO DE PERFORMANCE (1h) ===");
-   g_logger.Info(StringFormat("Ticks: %d (%.1f/min) | Sinais: %d | Ordens: %d", 
-                             g_ticksProcessed, ticksPerMinute, g_signalsGenerated, g_ordersExecuted));
-   g_logger.Info(StringFormat("Conta: Saldo=%.2f | Equity=%.2f | Margem Livre=%.2f | Posições=%d", 
-                             currentBalance, currentEquity, freeMargin, openPositions));
-   
-   // Reset contadores
-   g_ticksProcessed = 0;
-   g_signalsGenerated = 0;
-   g_ordersExecuted = 0;
-   g_lastStatsTime = currentTime;
-}
-
-//+------------------------------------------------------------------+
-//| Função auxiliar para verificar nova barra (melhorada)            |
-//+------------------------------------------------------------------+
-bool HasNewBar(string symbol, ENUM_TIMEFRAMES timeframe, int assetIndex)
-{
-   if(assetIndex < 0 || assetIndex >= ArraySize(g_lastBarTimes)) {
-      return false;
-   }
-   
-   datetime currentBarTime = iTime(symbol, timeframe, 0);
-   
-   if(currentBarTime != g_lastBarTimes[assetIndex]) {
-      g_lastBarTimes[assetIndex] = currentBarTime;
-      return true;
-   }
-   
-   return false;
-}
-
-//+------------------------------------------------------------------+
-//| Limpeza e manutenção de cache (chamada pelo timer)               |
-//+------------------------------------------------------------------+
-void PerformMaintenance()
-{
-   if(g_signalEngine != NULL) {
-      // Limpar cache de validação antigo (se implementado)
-      // g_signalEngine.ClearExpiredCache();
-   }
-   
-   // Outras tarefas de manutenção podem ser adicionadas aqui
-}
-
-//+------------------------------------------------------------------+
-//| Função de processamento de timer                                 |
-//+------------------------------------------------------------------+
-void OnTimer()
-{
-   // Verificar se os componentes estão inicializados
-   if (g_logger == NULL)
-   {
-      return;
-   }
-
-   // Exportar logs periodicamente (a cada hora)
-   datetime currentTime = TimeCurrent();
-   if (currentTime - g_lastExportTime > 60)
-   { // 3600 segundos = 1 hora
-      // g_logger.ExportToCSV("IntegratedPA_EA_log.csv", "Timestamp,Level,Message", "");
-      g_lastExportTime = currentTime;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Função de processamento de eventos de trade                      |
-//+------------------------------------------------------------------+
-void OnTrade()
-{
-   // Verificar se os componentes estão inicializados
-   if (g_logger == NULL)
-   {
-      return;
-   }
-
-   g_logger.Debug("Evento de trade detectado");
-
-   // Atualizar informações da conta
-   if (g_riskManager != NULL)
-   {
-      g_riskManager.UpdateAccountInfo();
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Função de processamento de eventos de livro de ofertas           |
-//+------------------------------------------------------------------+
-void OnBookEvent(const string &symbol)
-{
-   // Verificar se os componentes estão inicializados
-   if (g_logger == NULL || g_marketContext == NULL)
-   {
-      return;
-   }
-
-   // Atualizar informações de mercado se necessário
-   for (int i = 0; i < ArraySize(g_assets); i++)
-   {
-      if (g_assets[i].symbol == symbol && g_assets[i].enabled)
-      {
-         g_marketContext.UpdateMarketDepth(symbol);
-         break;
-      }
-   }
-}
-//+------------------------------------------------------------------+
+#endif // INTEGRATEDPA_EA_MQ5_

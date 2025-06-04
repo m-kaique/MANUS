@@ -56,7 +56,7 @@
 #define FIB_LEVEL_500           0.500
 #define FIB_LEVEL_618           0.618  // Golden Zone
 #define FIB_LEVEL_786           0.786
-
+#define FIB_LEVELS_COUNT        9
 //------ Risk Management Constants ------
 #define DEFAULT_RISK_PERCENT    1.0   // Risco padrão por trade
 #define MAX_DAILY_RISK          3.0   // Risco máximo diário

@@ -11,6 +11,7 @@
 #property version   "1.00"
 
 #include "Structures.mqh"
+#include "Constants.mqh"
 
 //+------------------------------------------------------------------+
 //| Funções para manipulação de timeframes                           |
@@ -111,34 +112,6 @@ ENUM_TIMEFRAMES GetLowerTimeframe(ENUM_TIMEFRAMES timeframe) {
       default:         return PERIOD_M5;
    }
 }
-
-//+------------------------------------------------------------------+
-//| Definições de Constantes                                         |
-//+------------------------------------------------------------------+
-
-// Parâmetros de médias móveis
-#define EMA_FAST_PERIOD      9
-#define EMA_MEDIUM_PERIOD    21
-#define EMA_SLOW_PERIOD      50
-#define SMA_LONG_PERIOD      200
-
-// Parâmetros de indicadores
-#define RSI_PERIOD           14
-#define RSI_OVERBOUGHT       70
-#define RSI_OVERSOLD         30
-#define ATR_PERIOD           14
-#define MACD_FAST_PERIOD     12
-#define MACD_SLOW_PERIOD     26
-#define MACD_SIGNAL_PERIOD   9
-
-// Constantes para cálculos de risco
-#define DEFAULT_RISK_PERCENT 1.0
-#define MAX_DAILY_RISK       3.0
-#define MAX_POSITION_SIZE    5
-#define MIN_RISK_REWARD      1.5
-
-// Níveis de Fibonacci
-#define FIB_LEVELS_COUNT     9
 
 //+------------------------------------------------------------------+
 //| Funções Auxiliares Básicas                                       |
@@ -301,9 +274,9 @@ bool CheckMeanReversion50to200(string symbol, ENUM_TIMEFRAMES timeframe, int loo
    
    // Obter handles para as médias móveis
    int ema50Handle = iMA(symbol, timeframe, EMA_SLOW_PERIOD, 0, MODE_EMA, PRICE_CLOSE);
-   int sma200Handle = iMA(symbol, timeframe, SMA_LONG_PERIOD, 0, MODE_SMA, PRICE_CLOSE);
+   int ema200Handle = iMA(symbol, timeframe, EMA_LONG_PERIOD, 0, MODE_SMA, PRICE_CLOSE);
    
-   if(ema50Handle == INVALID_HANDLE || sma200Handle == INVALID_HANDLE) {
+   if(ema50Handle == INVALID_HANDLE || ema200Handle == INVALID_HANDLE) {
       Print("Erro ao obter handles dos indicadores: ", GetLastError());
       return false;
    }
@@ -320,20 +293,20 @@ bool CheckMeanReversion50to200(string symbol, ENUM_TIMEFRAMES timeframe, int loo
    
    // Copiar dados para os arrays
    if(CopyBuffer(ema50Handle, 0, 0, lookbackBars, ema50Values) <= 0 ||
-      CopyBuffer(sma200Handle, 0, 0, lookbackBars, sma200Values) <= 0 ||
+      CopyBuffer(ema200Handle, 0, 0, lookbackBars, sma200Values) <= 0 ||
       CopyClose(symbol, timeframe, 0, lookbackBars, closeValues) <= 0) {
       Print("Erro ao copiar dados dos indicadores: ", GetLastError());
       
       // Liberar handles
       IndicatorRelease(ema50Handle);
-      IndicatorRelease(sma200Handle);
+      IndicatorRelease(ema200Handle);
       
       return false;
    }
    
    // Liberar handles
    IndicatorRelease(ema50Handle);
-   IndicatorRelease(sma200Handle);
+   IndicatorRelease(ema200Handle);
    
    // Verificar se temos dados suficientes
    if(ArraySize(ema50Values) < lookbackBars || ArraySize(sma200Values) < lookbackBars || ArraySize(closeValues) < lookbackBars) {

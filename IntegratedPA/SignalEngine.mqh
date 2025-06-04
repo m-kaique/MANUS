@@ -95,6 +95,7 @@ public:
    }
 };
 
+
 //+------------------------------------------------------------------+
 //| Classe para geração de sinais de trading                         |
 //+------------------------------------------------------------------+
@@ -126,6 +127,11 @@ private:
       int cooldownSeconds;
    };
    SignalCooldown m_signalCooldowns[];
+
+   bool m_trendStrategiesEnabled;
+   bool m_rangeStrategiesEnabled;
+   bool m_reversalStrategiesEnabled;
+   SETUP_QUALITY m_minimumSetupQuality;
 
    // Métodos para gerenciamento de cache
    bool IsInCooldown(string symbol, string strategy);
@@ -193,10 +199,19 @@ public:
    void SetMinRiskReward(double ratio) { m_minRiskReward = MathMax(ratio, 1.0); }
    void SetValidationCachePeriod(int seconds) { m_validationCache.validityPeriodSeconds = MathMax(seconds, 60); }
 
+   // Métodos de ativação/desativação de estratégias
+   void SetTrendStrategiesEnabled(bool enabled) { m_trendStrategiesEnabled = enabled; }
+   void SetRangeStrategiesEnabled(bool enabled) { m_rangeStrategiesEnabled = enabled; }
+   void SetReversalStrategiesEnabled(bool enabled) { m_reversalStrategiesEnabled = enabled; }
+   void SetMinimumSetupQuality(SETUP_QUALITY quality) { m_minimumSetupQuality = quality; }
+
+
    // Métodos utilitários
    double GetMaxAllowedSpread(string symbol);
    bool IsDataValid(string symbol, ENUM_TIMEFRAMES timeframe);
-   void ClearValidationCache() { m_validationCache = ValidationCache(); }
+   void ClearValidationCache() { m_validationCache = ValidationCache(); 
+   
+   }
 };
 
 //+------------------------------------------------------------------+
@@ -213,6 +228,8 @@ CSignalEngine::CSignalEngine()
    m_spikeAndChannelCache = NULL;
    ArrayResize(m_symbolCache, 0);
    ArrayResize(m_signalCooldowns, 0);
+
+   
 }
 
 //+------------------------------------------------------------------+
