@@ -85,7 +85,7 @@ public:
    bool GetSymbolRiskParams(string symbol, SymbolRiskParams &params); // MODIFICADO: Pass-by-reference
    
    // Métodos para cálculo de risco
-   //OrderRequest BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase);
+   OrderRequest BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase);
    double CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType, double entryPrice, MARKET_PHASE phase);
    double CalculateTakeProfit(string symbol, ENUM_ORDER_TYPE orderType, double entryPrice, double stopLoss);
    
@@ -588,6 +588,14 @@ void CRiskManager::UpdateAccountInfo() {
       m_logger.Debug(StringFormat("RiskManager: Conta atualizada - Saldo: %.2f, Equity: %.2f, Margem Livre: %.2f", 
                                  m_accountBalance, m_accountEquity, m_accountFreeMargin));
    }
+}
+
+OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase)
+{
+    OrderRequest request;
+ 
+    
+    return request;
 }
 
 //+------------------------------------------------------------------+
