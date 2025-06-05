@@ -1,4 +1,5 @@
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                             RiskManager.mqh |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
@@ -8,8 +9,12 @@
 #property version   "1.00"
 #property strict
 
+#ifndef RISKMANAGER_MQH
+#define RISKMANAGER_MQH
+
 // Inclusão de bibliotecas necessárias
 #include "Structures.mqh"
+#include "Constants.mqh"
 #include "Logger.mqh"
 #include "MarketContext.mqh"
 
@@ -570,6 +575,40 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
          stopDistance = m_symbolParams[index].defaultStopPoints * point;
    }
    
+   // Aplicar limites específicos por ativo baseado nas constantes
+   double maxStopDistance = 0;
+   
+   if (StringFind(symbol, "WIN") >= 0) {
+      if (phase == PHASE_TREND) {
+         maxStopDistance = WIN_SPIKE_MAX_STOP * point;
+      } else if (phase == PHASE_RANGE) {
+         maxStopDistance = WIN_CHANNEL_MAX_STOP * point;
+      } else {
+         maxStopDistance = WIN_SPIKE_MAX_STOP * point;
+      }
+   } else if (StringFind(symbol, "WDO") >= 0) {
+      if (phase == PHASE_TREND) {
+         maxStopDistance = WDO_SPIKE_MAX_STOP * point;
+      } else if (phase == PHASE_RANGE) {
+         maxStopDistance = WDO_CHANNEL_MAX_STOP * point;
+      } else {
+         maxStopDistance = WDO_SPIKE_MAX_STOP * point;
+      }
+   } else if (StringFind(symbol, "BIT") >= 0) {
+      if (phase == PHASE_TREND) {
+         maxStopDistance = BTC_SPIKE_MAX_STOP * point;
+      } else if (phase == PHASE_RANGE) {
+         maxStopDistance = BTC_CHANNEL_MAX_STOP * point;
+      } else {
+         maxStopDistance = BTC_SPIKE_MAX_STOP * point;
+      }
+   }
+   
+   // Aplicar o limite se definido
+   if (maxStopDistance > 0) {
+      stopDistance = MathMin(stopDistance, maxStopDistance);
+   }
+   
    // Garantir distância mínima
    double minStopDistance = 10 * point; // Mínimo de 10 pontos
    stopDistance = MathMax(stopDistance, minStopDistance);
@@ -645,33 +684,38 @@ double CRiskManager::CalculateTakeProfit(string symbol, ENUM_ORDER_TYPE orderTyp
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
    
-   // Definir relação risco/retorno padrão
-   double riskRewardRatio = 2.0; // Padrão: 1:2
+   // Calcular take profit baseado nas constantes específicas do ativo
+   double takeProfitDistance = 0;
    
-   if(index >= 0) {
-      // Ajustar com base nas configurações do símbolo
-      // (implementação futura)
+   if (StringFind(symbol, "WIN") >= 0) {
+      takeProfitDistance = WIN_FIRST_TARGET * GetSymbolPointValue(symbol);
+   } else if (StringFind(symbol, "WDO") >= 0) {
+      takeProfitDistance = WDO_FIRST_TARGET * GetSymbolPointValue(symbol);
+   } else if (StringFind(symbol, "BIT") >= 0) {
+      takeProfitDistance = BTC_FIRST_TARGET * GetSymbolPointValue(symbol);
+   } else {
+      // Fallback para outros símbolos: usar relação risco/retorno padrão
+      double riskRewardRatio = 2.0; // Padrão: 1:2
+      double stopDistance = MathAbs(entryPrice - stopLoss);
+      takeProfitDistance = stopDistance * riskRewardRatio;
    }
-   
-   // Calcular distância do stop loss
-   double stopDistance = MathAbs(entryPrice - stopLoss);
    
    // Calcular preço do take profit
    double takeProfit = 0;
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    
    if(orderType == ORDER_TYPE_BUY) {
-      takeProfit = entryPrice + (stopDistance * riskRewardRatio);
+      takeProfit = entryPrice + takeProfitDistance;
    } else {
-      takeProfit = entryPrice - (stopDistance * riskRewardRatio);
+      takeProfit = entryPrice - takeProfitDistance;
    }
    
    // Normalizar o preço do take profit
    takeProfit = NormalizeDouble(takeProfit, digits);
    
    if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("RiskManager: Take profit calculado para %s: %.5f (R:R = 1:%.1f)", 
-                                symbol, takeProfit, riskRewardRatio));
+      m_logger.Debug(StringFormat("RiskManager: Take profit calculado para %s: %.5f (baseado em constantes específicas do ativo)", 
+                                symbol, takeProfit));
    }
    
    return takeProfit;
@@ -991,3 +1035,6 @@ double CRiskManager::GetCurrentTotalRisk() {
    return 0.0;
 }
 //+------------------------------------------------------------------+
+
+#endif // RISKMANAGER_MQH
+

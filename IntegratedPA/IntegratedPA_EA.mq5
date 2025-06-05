@@ -230,13 +230,13 @@ bool SetupAssets()
    // Configurar WIN
    if (EnableWIN)
    {
-      g_assets[index].symbol = "WIN$";
+      g_assets[index].symbol = "WIN$D";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 1.0;
       g_assets[index].maxLot = 2.0;
       g_assets[index].lotStep = 1.0;
-      g_assets[index].tickValue = SymbolInfoDouble("WIN$", SYMBOL_TRADE_TICK_VALUE);
-      g_assets[index].digits = (int)SymbolInfoInteger("WIN$", SYMBOL_DIGITS);
+      g_assets[index].tickValue = SymbolInfoDouble("WIN$D", SYMBOL_TRADE_TICK_VALUE);
+      g_assets[index].digits = (int)SymbolInfoInteger("WIN$D", SYMBOL_DIGITS);
       g_assets[index].riskPercentage = RiskPerTrade * 0.9; // 10% menos risco para WIN
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
@@ -251,7 +251,7 @@ bool SetupAssets()
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.2;
 
-      if (!SymbolSelect("WIN$", true))
+      if (!SymbolSelect("WIN$D", true))
       {
          if (g_logger != NULL)
          {
@@ -940,13 +940,33 @@ void ManageExistingPositions()
    // Atualizar tempo de último gerenciamento
    lastManagementTime = currentTime;
    
-   // Gerenciar posições abertas (trailing stops, etc.)
-   g_tradeExecutor.ManageOpenPositions();
+   // Obter magic number do EA para identificar posições gerenciadas
+   ulong eaMagicNumber = g_tradeExecutor.GetMagicNumber();
+   
+   // Gerenciar posições abertas com trailing stop específico por ativo
+   for (int i = PositionsTotal() - 1; i >= 0; i--) {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket <= 0) continue;
+      
+      // Verificar se a posição pertence a este EA
+      if (PositionGetInteger(POSITION_MAGIC) != eaMagicNumber) continue;
+      
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      
+      // Aplicar trailing stop específico por ativo
+      if (StringFind(symbol, "WIN") >= 0) {
+         g_tradeExecutor.ApplyTrailingStop(ticket, WIN_TRAILING_STOP);
+      } else if (StringFind(symbol, "WDO") >= 0) {
+         g_tradeExecutor.ApplyTrailingStop(ticket, WDO_TRAILING_STOP);
+      } else if (StringFind(symbol, "BIT") >= 0) {
+         g_tradeExecutor.ApplyTrailingStop(ticket, BTC_TRAILING_STOP);
+      }
+   }
    
    // Log apenas se houver posições abertas
    int openPositions = PositionsTotal();
    if(openPositions > 0 && g_logger != NULL) {
-      g_logger.Debug(StringFormat("Gerenciando %d posições abertas", openPositions));
+      g_logger.Debug(StringFormat("Gerenciando %d posições abertas com trailing stop específico por ativo", openPositions));
    }
 }
 

@@ -1,4 +1,5 @@
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //|                                            TradeExecutor.mqh |
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
@@ -7,6 +8,9 @@
 #property link      "https://www.mql5.com"
 #property version   "1.00"
 #property strict
+
+#ifndef TRADEEXECUTOR_MQH
+#define TRADEEXECUTOR_MQH
 
 // Inclusão de bibliotecas necessárias
 #include <Trade/Trade.mqh>
@@ -101,6 +105,7 @@ public:
    // Métodos de acesso
    int GetLastError() const { return m_lastError; }
    string GetLastErrorDescription() const { return m_lastErrorDesc; }
+   ulong GetMagicNumber() const { return m_trade.RequestMagic(); }
 };
 
 //+------------------------------------------------------------------+
@@ -1123,3 +1128,6 @@ double CTradeExecutor::CalculateMATrailingStop(string symbol, ENUM_TIMEFRAMES ti
    return newStopLoss;
 }
 //+------------------------------------------------------------------+
+
+#endif // TRADEEXECUTOR_MQH
+

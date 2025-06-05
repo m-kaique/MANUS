@@ -8,6 +8,9 @@
 #property version   "1.00"
 #property strict
 
+#ifndef SPIKEANDCHANNEL_MQH
+#define SPIKEANDCHANNEL_MQH
+
 #include "../Structures.mqh"
 #include "../Utils.mqh"
 #include "../Logger.mqh"
@@ -114,7 +117,7 @@ public:
 CSpikeAndChannel::CSpikeAndChannel() {
    m_logger = NULL;
    m_marketContext = NULL;
-   m_spikeMinBars = 3;
+   m_spikeMinBars = 2;
    m_spikeMaxBars = 5;
    m_minSpikeBodyRatio = 0.7;
    m_minChannelPullbackRatio = 0.3;
@@ -127,7 +130,7 @@ CSpikeAndChannel::CSpikeAndChannel() {
 CSpikeAndChannel::CSpikeAndChannel(CLogger* logger, CMarketContext* marketContext) {
    m_logger = logger;
    m_marketContext = marketContext;
-   m_spikeMinBars = 3;
+   m_spikeMinBars = 2;
    m_spikeMaxBars = 5;
    m_minSpikeBodyRatio = 0.7;
    m_minChannelPullbackRatio = 0.3;
@@ -1004,17 +1007,11 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
    signal.strategy = "Spike and Channel";
    signal.isActive = true;
    
-   // Calcular take profits
-   double riskPoints = MathAbs(entryPrice - stopLoss);
-   
-   if(pattern.isUptrend) {
-      signal.takeProfits[0] = entryPrice + riskPoints * 1.0; // 1:1
-      signal.takeProfits[1] = entryPrice + riskPoints * 2.0; // 2:1
-      signal.takeProfits[2] = entryPrice + riskPoints * 3.0; // 3:1
-   } else {
-      signal.takeProfits[0] = entryPrice - riskPoints * 1.0; // 1:1
-      signal.takeProfits[1] = entryPrice - riskPoints * 2.0; // 2:1
-      signal.takeProfits[2] = entryPrice - riskPoints * 3.0; // 3:1
+   // Calcular take profits - REMOVIDO: Delegado para RiskManager
+   // Os take profits serão calculados pelo RiskManager baseado nas constantes específicas do ativo
+   // Inicializar array vazio
+   for(int i = 0; i < 3; i++) {
+      signal.takeProfits[i] = 0.0;
    }
    
    // Calcular relação risco/retorno
@@ -1035,3 +1032,6 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
    
    return signal;
 }
+
+#endif // SPIKEANDCHANNEL_MQH
+
