@@ -25,6 +25,11 @@
 #include "TradeExecutor.mqh"
 #include "Logger.mqh"
 #include "Utils.mqh"
+<<<<<<< Updated upstream
+=======
+#include "IndicatorManager.mqh"
+#include "MarketContext_Diagnostico.mqh"
+>>>>>>> Stashed changes
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -371,7 +376,12 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+<<<<<<< Updated upstream
    g_logger.Info("Iniciando Expert Advisor...");
+=======
+   g_logger.Info("=== INICIANDO EXPERT ADVISOR REFATORADO ===");
+   g_logger.SetLogLevel(LOG_LEVEL_DEBUG);
+>>>>>>> Stashed changes
 
    // Verificar compatibilidade
    if (MQLInfoInteger(MQL_TESTER) == false)
@@ -390,7 +400,20 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+<<<<<<< Updated upstream
    // Inicializar componentes
+=======
+   // Inicializar IndicatorManager PRIMEIRO com limite reduzido
+   g_indicatorManager = new CIndicatorManager(30, 3600); // 30 handles máximo
+   if (g_indicatorManager == NULL)
+   {
+      g_logger.Error("Erro ao criar objeto IndicatorManager");
+      return (INIT_FAILED);
+   }
+   g_indicatorManager.Initialize(g_logger);
+
+   // Inicializar MarketContext COM IndicatorManager
+>>>>>>> Stashed changes
    g_marketContext = new CMarketContext();
    if (g_marketContext == NULL)
    {
@@ -406,6 +429,22 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+<<<<<<< Updated upstream
+=======
+      // DIAGNÓSTICO TEMPORÁRIO
+  // #include "MarketContext_Diagnostico.mqh"
+   CMarketContextDiagnostic* diagnostic = new CMarketContextDiagnostic();
+   if(diagnostic.Initialize(Symbol(), MainTimeframe, g_logger, g_indicatorManager)) {
+      g_logger.Info("DIAGNÓSTICO: MarketContext funcionando corretamente");
+   } else {
+      g_logger.Error("DIAGNÓSTICO: Problemas detectados no MarketContext");
+   }
+   diagnostic.PrintHandleStats();
+   delete diagnostic;
+
+
+   // Inicializar SignalEngine
+>>>>>>> Stashed changes
    g_signalEngine = new CSignalEngine();
    if (g_signalEngine == NULL)
    {
@@ -1063,7 +1102,41 @@ int OnInit()
             // Tentar aplicar o trailing stop fixo com base nos parâmetros do símbolo
             g_tradeExecutor.ApplyTrailingStop(ticket, riskParams.trailingStopPoints);
          }
+<<<<<<< Updated upstream
          else
+=======
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Verificar integridade do sistema                                 |
+//+------------------------------------------------------------------+
+void VerifySystemIntegrity()
+{
+   // Verificar se todos os componentes estão funcionais
+   bool systemOk = true;
+
+   if (g_logger == NULL) systemOk = false;
+   if (g_marketContext == NULL) systemOk = false;
+   if (g_signalEngine == NULL) systemOk = false;
+   if (g_riskManager == NULL) systemOk = false;
+   if (g_tradeExecutor == NULL) systemOk = false;
+   if (g_indicatorManager == NULL) systemOk = false;
+
+   if (!systemOk && g_logger != NULL)
+   {
+      g_logger.Error("Falha na integridade do sistema - componentes não inicializados");
+   }
+
+   // Verificar handles de indicadores
+   if (g_indicatorManager != NULL)
+   {
+      int handleCount = g_indicatorManager.GetHandleCount();
+      if (handleCount > 25) // Limite de segurança reduzido
+      {
+         if (g_logger != NULL)
+>>>>>>> Stashed changes
          {
             // Log se os parâmetros ou o trailing stop não estiverem definidos para este símbolo
             // (O aviso de parâmetros não encontrados já é logado por GetSymbolRiskParams)
@@ -1223,4 +1296,268 @@ int OnInit()
          }
       }
    }
+<<<<<<< Updated upstream
    //+------------------------------------------------------------------+
+=======
+}
+
+//+------------------------------------------------------------------+
+//| Verificar se a fase está habilitada                              |
+//+------------------------------------------------------------------+
+bool IsPhaseEnabled(MARKET_PHASE phase)
+{
+   switch (phase)
+   {
+   case PHASE_TREND: return EnableTrendStrategies;
+   case PHASE_RANGE: return EnableRangeStrategies;
+   case PHASE_REVERSAL: return EnableReversalStrategies;
+   default: return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Gerar sinal com base na fase                                     |
+//+------------------------------------------------------------------+
+Signal GenerateSignalForPhase(string symbol, MARKET_PHASE phase)
+{
+   Signal signal;
+   signal.id = 0; // Sinal inválido por padrão
+
+   if (g_signalEngine == NULL)
+   {
+      return signal;
+   }
+
+   switch (phase)
+   {
+   case PHASE_TREND:
+      signal = g_signalEngine.GenerateTrendSignals(symbol, MainTimeframe);
+      break;
+   case PHASE_RANGE:
+      signal = g_signalEngine.GenerateRangeSignals(symbol, MainTimeframe);
+      break;
+   case PHASE_REVERSAL:
+      signal = g_signalEngine.GenerateReversalSignals(symbol, MainTimeframe);
+      break;
+   default:
+      if (g_logger != NULL)
+      {
+         g_logger.Debug("Fase não suportada: " + EnumToString(phase));
+      }
+      break;
+   }
+
+   return signal;
+}
+
+//+------------------------------------------------------------------+
+//| Processar sinal gerado                                           |
+//+------------------------------------------------------------------+
+bool ProcessSignal(string symbol, Signal &signal, MARKET_PHASE phase)
+{
+   // Verificar se o sinal é válido
+   if (signal.id <= 0 || signal.quality == SETUP_INVALID)
+   {
+      return false;
+   }
+
+   // Filtrar setups de baixa qualidade
+   if (signal.quality == SETUP_C)
+   {
+      if (g_logger != NULL)
+      {
+         g_logger.Debug(StringFormat("%s: Setup C descartado", symbol));
+      }
+      return false;
+   }
+
+   g_signalsGenerated++;
+
+   // Log do sinal
+   LogSignalGenerated(symbol, signal);
+
+   // Criar e executar ordem
+   OrderRequest request = CreateOrderRequest(symbol, signal, phase);
+   return ExecuteOrder(request);
+}
+
+//+------------------------------------------------------------------+
+//| Log de sinal gerado                                              |
+//+------------------------------------------------------------------+
+void LogSignalGenerated(string symbol, Signal &signal)
+{
+   if (g_logger == NULL) return;
+
+   string direction = (signal.direction == ORDER_TYPE_BUY) ? "BUY" : "SELL";
+   string strategy = signal.strategy;
+   string quality = EnumToString(signal.quality);
+
+   g_logger.Info(StringFormat("Sinal gerado: %s %s %s Q:%s R:R:%.1f @%.5f",
+                              symbol, direction, strategy, quality,
+                              signal.riskRewardRatio, signal.entryPrice));
+}
+
+//+------------------------------------------------------------------+
+//| Criar requisição de ordem                                         |
+//+------------------------------------------------------------------+
+OrderRequest CreateOrderRequest(string symbol, Signal &signal, MARKET_PHASE phase)
+{
+   OrderRequest request;
+   request.id = 0; // Requisição inválida por padrão
+
+   if (g_riskManager == NULL)
+   {
+      if (g_logger != NULL)
+      {
+         g_logger.Error("RiskManager não disponível para criar requisição");
+      }
+      return request;
+   }
+
+   request = g_riskManager.BuildRequest(symbol, signal, phase);
+   return request;
+}
+
+//+------------------------------------------------------------------+
+//| Executar ordem                                                   |
+//+------------------------------------------------------------------+
+bool ExecuteOrder(OrderRequest &request)
+{
+   if (request.volume <= 0 || request.price <= 0)
+   {
+      if (g_logger != NULL)
+      {
+         g_logger.Warning("Requisição de ordem inválida");
+      }
+      return false;
+   }
+
+   if (g_tradeExecutor == NULL)
+   {
+      if (g_logger != NULL)
+      {
+         g_logger.Error("TradeExecutor não disponível");
+      }
+      return false;
+   }
+
+   if (g_tradeExecutor.Execute(request))
+   {
+      g_ordersExecuted++;
+      if (g_logger != NULL)
+      {
+         g_logger.Info(StringFormat("Ordem executada: %s %.2f lotes @%.5f",
+                                    request.symbol, request.volume, request.price));
+      }
+      return true;
+   }
+   else
+   {
+      if (g_logger != NULL)
+      {
+         g_logger.Warning(StringFormat("Falha na execução: %s", g_tradeExecutor.GetLastErrorDescription()));
+      }
+      return false;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Gerar relatórios de performance                                  |
+//+------------------------------------------------------------------+
+void GeneratePerformanceReports()
+{
+   if (g_logger == NULL) return;
+
+   // Estatísticas da conta
+   double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+   int openPositions = PositionsTotal();
+
+   // Calcular estatísticas do período
+   double ticksPerMinute = (double)g_ticksProcessed / (REPORT_INTERVAL / 60.0);
+
+   // Log do relatório
+   g_logger.Info("=== RELATÓRIO DE PERFORMANCE (1h) ===");
+   g_logger.Info(StringFormat("Ticks: %d (%.1f/min) | Sinais: %d | Ordens: %d | Posições gerenciadas: %d",
+                              g_ticksProcessed, ticksPerMinute, g_signalsGenerated, g_ordersExecuted, g_positionsManaged));
+   g_logger.Info(StringFormat("Conta: Saldo=%.2f | Equity=%.2f | Margem Livre=%.2f | Posições Abertas=%d",
+                              currentBalance, currentEquity, freeMargin, openPositions));
+
+   // Estatísticas de handles
+   if (g_indicatorManager != NULL)
+   {
+      int handleCount = g_indicatorManager.GetHandleCount();
+      g_logger.Info(StringFormat("Handles de indicadores em uso: %d", handleCount));
+   }
+
+   // Reset contadores
+   g_ticksProcessed = 0;
+   g_signalsGenerated = 0;
+   g_ordersExecuted = 0;
+   g_positionsManaged = 0;
+}
+
+//+------------------------------------------------------------------+
+//| Função de timer                                                  |
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+   if (g_logger == NULL) return;
+
+   datetime currentTime = TimeCurrent();
+   
+   // Exportar logs periodicamente
+   if (currentTime - g_lastExportTime >= EXPORT_INTERVAL)
+   {
+      g_logger.ExportToCSV("IntegratedPA_EA_log.csv");
+      g_lastExportTime = currentTime;
+      
+      g_logger.Info("Logs exportados automaticamente");
+   }
+
+   // Manutenção de handles de indicadores
+   if (g_indicatorManager != NULL)
+   {
+      g_indicatorManager.PerformMaintenance();
+      g_logger.Debug("Manutenção de handles de indicadores executada");
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Função de eventos de trade                                       |
+//+------------------------------------------------------------------+
+void OnTrade()
+{
+   if (g_logger == NULL) return;
+
+   g_logger.Debug("Evento de trade detectado");
+
+   // Atualizar informações da conta
+   if (g_riskManager != NULL)
+   {
+      g_riskManager.UpdateAccountInfo();
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Função de eventos de livro de ofertas                            |
+//+------------------------------------------------------------------+
+void OnBookEvent(const string &symbol)
+{
+   if (g_logger == NULL || g_marketContext == NULL) return;
+
+   // Atualizar profundidade de mercado se necessário
+   for (int i = 0; i < ArraySize(g_assets); i++)
+   {
+      if (g_assets[i].symbol == symbol && g_assets[i].enabled)
+      {
+         g_marketContext.UpdateMarketDepth(symbol);
+         break;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+
+>>>>>>> Stashed changes
