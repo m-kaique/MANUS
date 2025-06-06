@@ -8,7 +8,6 @@
 #property version   "1.00"
 
 #include "Structures.mqh"
-#include "Constants.mqh"
 
 //+------------------------------------------------------------------+
 //| Funções para manipulação de timeframes                           |
@@ -110,7 +109,33 @@ ENUM_TIMEFRAMES GetLowerTimeframe(ENUM_TIMEFRAMES timeframe) {
    }
 }
 
+//+------------------------------------------------------------------+
+//| Definições de Constantes                                         |
+//+------------------------------------------------------------------+
 
+// Parâmetros de médias móveis
+#define EMA_FAST_PERIOD      9
+#define EMA_MEDIUM_PERIOD    21
+#define EMA_SLOW_PERIOD      50
+#define SMA_LONG_PERIOD      200
+
+// Parâmetros de indicadores
+#define RSI_PERIOD           14
+#define RSI_OVERBOUGHT       70
+#define RSI_OVERSOLD         30
+#define ATR_PERIOD           14
+#define MACD_FAST_PERIOD     12
+#define MACD_SLOW_PERIOD     26
+#define MACD_SIGNAL_PERIOD   9
+
+// Constantes para cálculos de risco
+#define DEFAULT_RISK_PERCENT 1.0
+#define MAX_DAILY_RISK       3.0
+#define MAX_POSITION_SIZE    5
+#define MIN_RISK_REWARD      1.5
+
+// Níveis de Fibonacci
+#define FIB_LEVELS_COUNT     9
 
 //+------------------------------------------------------------------+
 //| Funções Auxiliares Básicas                                       |

@@ -119,9 +119,6 @@
 #endif
 
 //------ Fibonacci Levels ------
-// Níveis de Fibonacci
-#define FIB_LEVELS_COUNT     9
-
 #ifndef FIB_LEVEL_236
 #define FIB_LEVEL_236           0.236
 #endif
@@ -187,7 +184,6 @@
 #define TREND_MIN_EMA_SEPARATION    0.1   // Separação mínima entre EMAs para tendência
 #define RANGE_MAX_EMA_SEPARATION    0.05  // Separação máxima entre EMAs para range
 #define REVERSAL_MIN_DIVERGENCE     5     // Divergência mínima para reversão
-#define SMA_LONG_PERIOD      200
 
 //------ Volume Analysis ------
 #define VOLUME_SPIKE_THRESHOLD      150   // % para considerar spike de volume
