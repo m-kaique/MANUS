@@ -1,4 +1,5 @@
 
+
 # Problemas e Soluções em Indicadores e Classificadores
 
 ## 1. Problemas de Cálculo Prematuro de R:R
