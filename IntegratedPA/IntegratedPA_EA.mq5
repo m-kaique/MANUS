@@ -284,8 +284,8 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   g_logger.Info("=== INICIANDO EXPERT ADVISOR REFATORADO ===");
-   g_logger.SetLogLevel(LOG_LEVEL_DEBUG);
+   g_logger.Info("=== INICIANDO EXPERT ADVISOR ===");
+   g_logger.SetLogLevel(LOG_LEVEL_INFO);
 
    // Verificar compatibilidade
    if (MQLInfoInteger(MQL_TESTER) == false)
@@ -304,7 +304,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   // Inicializar IndicatorManager PRIMEIRO
+  // Inicializar IndicatorManager SEM limites ou timeouts
    g_indicatorManager = new CIndicatorManager();
    if (g_indicatorManager == NULL)
    {
@@ -328,14 +328,15 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   // Inicializar SignalEngine
-   g_signalEngine = new CSignalEngine();
+   // Criar SignalEngine com os parâmetros corretos
+   g_signalEngine = new CSignalEngine(g_logger, g_marketContext, g_indicatorManager);
    if (g_signalEngine == NULL)
    {
-      g_logger.Error("Erro ao criar objeto SignalEngine");
+      g_logger.Error("Erro ao criar objeto SignalEngine com parâmetros");
       return (INIT_FAILED);
    }
 
+   // Initialize já vai usar os objetos passados no construtor
    if (!g_signalEngine.Initialize(g_logger, g_marketContext))
    {
       g_logger.Error("Falha ao inicializar SignalEngine");
@@ -419,7 +420,7 @@ void OnDeinit(const int reason)
       g_logger.Info("Expert Advisor finalizado. Motivo: " + reasonStr);
    }
 
-   EventKillTimer();
+    EventKillTimer();
 
    // Exportar logs finais
    if (g_logger != NULL)
@@ -427,13 +428,52 @@ void OnDeinit(const int reason)
       g_logger.ExportToCSV("IntegratedPA_EA_log.csv");
    }
 
-   // Liberar memória na ordem inversa
-   if (g_tradeExecutor != NULL) { delete g_tradeExecutor; g_tradeExecutor = NULL; }
-   if (g_riskManager != NULL) { delete g_riskManager; g_riskManager = NULL; }
-   if (g_signalEngine != NULL) { delete g_signalEngine; g_signalEngine = NULL; }
-   if (g_marketContext != NULL) { delete g_marketContext; g_marketContext = NULL; }
-   if (g_indicatorManager != NULL) { delete g_indicatorManager; g_indicatorManager = NULL; }
-   if (g_logger != NULL) { delete g_logger; g_logger = NULL; }
+   // IMPORTANTE: Liberar na ordem inversa de criação
+   // 1. TradeExecutor (não usa indicadores)
+   if (g_tradeExecutor != NULL)
+   {
+      delete g_tradeExecutor;
+      g_tradeExecutor = NULL;
+   }
+   
+   // 2. RiskManager (pode usar MarketContext)
+   if (g_riskManager != NULL)
+   {
+      delete g_riskManager;
+      g_riskManager = NULL;
+   }
+   
+   // 3. SignalEngine (usa MarketContext)
+   if (g_signalEngine != NULL)
+   {
+      delete g_signalEngine;
+      g_signalEngine = NULL;
+   }
+   
+   // 4. MarketContext (usa IndicatorManager)
+   if (g_marketContext != NULL)
+   {
+      delete g_marketContext;
+      g_marketContext = NULL;
+   }
+   
+   // 5. IndicatorManager (ÚLTIMO - liberará todos os handles)
+   if (g_indicatorManager != NULL)
+   {
+      if (g_logger != NULL)
+      {
+         g_logger.Info("Liberando IndicatorManager e todos os handles...");
+      }
+      delete g_indicatorManager;
+      g_indicatorManager = NULL;
+   }
+   
+   // 6. Logger (último de todos)
+   if (g_logger != NULL)
+   {
+      delete g_logger;
+      g_logger = NULL;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -1088,11 +1128,14 @@ void OnTimer()
       g_logger.Info("Logs exportados automaticamente");
    }
 
-   // Limpeza de cache de indicadores
+   // REMOVIDO: Manutenção de handles
+   // NÃO CHAMAR MAIS: g_indicatorManager.PerformMaintenance();
+   
+   // Apenas imprimir estatísticas para debug (opcional)
    if (g_indicatorManager != NULL)
    {
-      // A limpeza automática já é feita internamente pelo IndicatorManager
-      g_logger.Debug("Manutenção de handles de indicadores executada");
+      g_logger.Debug(StringFormat("IndicatorManager: %d handles permanentes em uso", 
+                                g_indicatorManager.GetHandleCount()));
    }
 }
 
