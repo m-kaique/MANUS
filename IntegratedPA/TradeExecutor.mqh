@@ -83,7 +83,7 @@ public:
    ~CTradeExecutor();
    
    // Métodos de inicialização
-   bool Initialize(CLogger* logger, int deviationPoints);
+   bool Initialize(CLogger* logger);
 
    bool ExecuteInBatches(OrderRequest &request, double maxBatchSize);
 
@@ -134,10 +134,9 @@ CTradeExecutor::~CTradeExecutor() {
 }
 
 //+------------------------------------------------------------------+
-//| Função Initialize do TradeExecutor com desvio reduzido           |
+//| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger* logger, int deviationPoints = 5)
-{
+bool CTradeExecutor::Initialize(CLogger* logger) {
    // Verificar parâmetros
    if(logger == NULL) {
       Print("CTradeExecutor::Initialize - Logger não pode ser NULL");
@@ -159,269 +158,11 @@ bool CTradeExecutor::Initialize(CLogger* logger, int deviationPoints = 5)
    m_trade.SetExpertMagicNumber(123456); // Magic number para identificar ordens deste EA
    m_trade.SetMarginMode();
    m_trade.SetTypeFillingBySymbol(Symbol());
+   m_trade.SetDeviationInPoints(10); // Desvio máximo de preço em pontos
    
-   // MODIFICAR: Reduzir desvio de 10 para 5 pontos
-   m_trade.SetDeviationInPoints(deviationPoints); // Desvio máximo de preço em pontos
-   
-   m_logger.Info(StringFormat("TradeExecutor inicializado com sucesso (desvio: %d pontos)", deviationPoints));
+   m_logger.Info("TradeExecutor inicializado com sucesso");
    return true;
 }
-
-
-//+------------------------------------------------------------------+
-//| Método ExecuteInBatches para execução de ordens em lotes menores |
-//+------------------------------------------------------------------+
-bool CTradeExecutor::ExecuteInBatches(OrderRequest &request, double maxBatchSize = 1.0)
-{
-   // Verificar se trading está permitido
-   if(!m_tradeAllowed) {
-      m_lastError = -1;
-      m_lastErrorDesc = "Trading não está habilitado";
-      if(m_logger != NULL) {
-         m_logger.Warning(m_lastErrorDesc);
-      }
-      return false;
-   }
-   
-   // Verificar parâmetros
-   if(request.symbol == "" || request.volume <= 0 || maxBatchSize <= 0) {
-      m_lastError = -2;
-      m_lastErrorDesc = "Parâmetros de ordem inválidos";
-      if(m_logger != NULL) {
-         m_logger.Error(m_lastErrorDesc);
-      }
-      return false;
-   }
-   
-   // Registrar detalhes da ordem
-   if(m_logger != NULL) {
-      m_logger.Info(StringFormat("Executando ordem em lotes: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f, Lote máximo: %.2f",
-                                request.symbol,
-                                request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
-                                request.volume,
-                                request.price,
-                                request.stopLoss,
-                                request.takeProfit,
-                                maxBatchSize));
-   }
-   
-   double remainingVolume = request.volume;
-   bool allSuccess = true;
-   int batchCount = 0;
-   
-   while(remainingVolume > 0) {
-      double batchVolume = MathMin(remainingVolume, maxBatchSize);
-      batchCount++;
-      
-      // Criar requisição temporária
-      OrderRequest batchRequest = request;
-      batchRequest.volume = batchVolume;
-      
-      if(m_logger != NULL) {
-         m_logger.Info(StringFormat("Executando lote %d: %.2f de %.2f", batchCount, batchVolume, request.volume));
-      }
-      
-      // Usar o método Execute original para executar o lote
-      bool result = false;
-      int retries = 0;
-      
-      while(retries < m_maxRetries && !result) {
-         if(retries > 0) {
-            if(m_logger != NULL) {
-               m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-            }
-            Sleep(m_retryDelay);
-         }
-         
-         // Executar ordem de acordo com o tipo
-         switch(batchRequest.type) {
-            case ORDER_TYPE_BUY:
-               result = m_trade.Buy(batchRequest.volume, batchRequest.symbol, batchRequest.price, batchRequest.stopLoss, batchRequest.takeProfit, batchRequest.comment);
-               break;
-            case ORDER_TYPE_SELL:
-               result = m_trade.Sell(batchRequest.volume, batchRequest.symbol, batchRequest.price, batchRequest.stopLoss, batchRequest.takeProfit, batchRequest.comment);
-               break;
-            case ORDER_TYPE_BUY_LIMIT:
-               result = m_trade.BuyLimit(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
-               break;
-            case ORDER_TYPE_SELL_LIMIT:
-               result = m_trade.SellLimit(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
-               break;
-            case ORDER_TYPE_BUY_STOP:
-               result = m_trade.BuyStop(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
-               break;
-            case ORDER_TYPE_SELL_STOP:
-               result = m_trade.SellStop(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
-               break;
-            default:
-               m_lastError = -3;
-               m_lastErrorDesc = "Tipo de ordem não suportado";
-               if(m_logger != NULL) {
-                  m_logger.Error(m_lastErrorDesc);
-               }
-               return false;
-         }
-         
-         // Verificar resultado
-         if(!result) {
-            m_lastError = (int)m_trade.ResultRetcode();
-            m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
-            
-            // Verificar se o erro é recuperável
-            if(!IsRetryableError(m_lastError)) {
-               if(m_logger != NULL) {
-                  m_logger.Error(m_lastErrorDesc);
-               }
-               return false;
-            }
-         }
-         
-         retries++;
-      }
-      
-      if(!result) {
-         if(m_logger != NULL) {
-            m_logger.Error(StringFormat("Falha ao executar lote %d: %.2f", batchCount, batchVolume));
-         }
-         allSuccess = false;
-         break;
-      }
-      
-      remainingVolume -= batchVolume;
-      
-      // Pequena pausa entre ordens
-      if(remainingVolume > 0) {
-         Sleep(100);
-      }
-   }
-   
-   if(allSuccess) {
-      if(m_logger != NULL) {
-         m_logger.Info(StringFormat("Todos os %d lotes executados com sucesso", batchCount));
-      }
-   } else {
-      if(m_logger != NULL) {
-         m_logger.Warning(StringFormat("Execução parcial: %d de %d lotes executados", batchCount - 1, (int)MathCeil(request.volume / maxBatchSize)));
-      }
-   }
-   
-   return allSuccess;
-}
-
-//+------------------------------------------------------------------+
-//| Modificação do método Execute para usar ExecuteInBatches         |
-//+------------------------------------------------------------------+
-bool CTradeExecutor::Execute(OrderRequest &request)
-{
-   // Verificar se o volume é grande e se deve usar execução em lotes
-   if(request.volume > 1.0) {
-      return ExecuteInBatches(request, 1.0);
-   }
-   
-   // Código original do método Execute para volumes pequenos
-   // Verificar se trading está permitido
-   if(!m_tradeAllowed) {
-      m_lastError = -1;
-      m_lastErrorDesc = "Trading não está habilitado";
-      if(m_logger != NULL) {
-         m_logger.Warning(m_lastErrorDesc);
-      }
-      return false;
-   }
-   
-   // Verificar parâmetros
-   if(request.symbol == "" || request.volume <= 0) {
-      m_lastError = -2;
-      m_lastErrorDesc = "Parâmetros de ordem inválidos";
-      if(m_logger != NULL) {
-         m_logger.Error(m_lastErrorDesc);
-      }
-      return false;
-   }
-   
-   // Registrar detalhes da ordem
-   if(m_logger != NULL) {
-      m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
-                                request.symbol,
-                                request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
-                                request.volume,
-                                request.price,
-                                request.stopLoss,
-                                request.takeProfit));
-   }
-   
-   // Executar ordem com retry
-   bool result = false;
-   int retries = 0;
-   
-   while(retries < m_maxRetries && !result) {
-      if(retries > 0) {
-         if(m_logger != NULL) {
-            m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-         }
-         Sleep(m_retryDelay);
-      }
-      
-      // Executar ordem de acordo com o tipo
-      switch(request.type) {
-         case ORDER_TYPE_BUY:
-            result = m_trade.Buy(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
-            break;
-         case ORDER_TYPE_SELL:
-            result = m_trade.Sell(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
-            break;
-         case ORDER_TYPE_BUY_LIMIT:
-            result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-            break;
-         case ORDER_TYPE_SELL_LIMIT:
-            result = m_trade.SellLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-            break;
-         case ORDER_TYPE_BUY_STOP:
-            result = m_trade.BuyStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-            break;
-         case ORDER_TYPE_SELL_STOP:
-            result = m_trade.SellStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-            break;
-         default:
-            m_lastError = -3;
-            m_lastErrorDesc = "Tipo de ordem não suportado";
-            if(m_logger != NULL) {
-               m_logger.Error(m_lastErrorDesc);
-            }
-            return false;
-      }
-      
-      // Verificar resultado
-      if(!result) {
-         m_lastError = (int)m_trade.ResultRetcode();
-         m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
-         
-         // Verificar se o erro é recuperável
-         if(!IsRetryableError(m_lastError)) {
-            if(m_logger != NULL) {
-               m_logger.Error(m_lastErrorDesc);
-            }
-            return false;
-         }
-      }
-      
-      retries++;
-   }
-   
-   // Verificar resultado final
-   if(result) {
-      if(m_logger != NULL) {
-         m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", m_trade.ResultOrder()));
-      }
-      return true;
-   } else {
-      if(m_logger != NULL) {
-         m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
-      }
-      return false;
-   }
-}
-
 
 //+------------------------------------------------------------------+
 //| Modificação de posição                                           |
@@ -596,10 +337,9 @@ bool CTradeExecutor::CloseAllPositions(string symbol = "") {
 }
 
 //+------------------------------------------------------------------+
-//| Função ApplyTrailingStop corrigida com logs de debug adicionais   |
+//| Aplicar trailing stop fixo                                       |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::ApplyTrailingStop(ulong ticket, double points)
-{
+bool CTradeExecutor::ApplyTrailingStop(ulong ticket, double points) {
    // Verificar se trading está permitido
    if(!m_tradeAllowed) {
       m_lastError = -1;
@@ -622,24 +362,6 @@ bool CTradeExecutor::ApplyTrailingStop(ulong ticket, double points)
       m_lastErrorDesc = "Posição não encontrada";
       m_logger.Error(StringFormat("Falha ao selecionar posição #%d para trailing stop", ticket));
       return false;
-   }
-   
-   // Obter informações da posição
-   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
-   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   
-   // ADICIONAR: Log de debug para trailing stop
-   if(m_logger != NULL) {
-      double profit = 0;
-      if(posType == POSITION_TYPE_BUY) {
-         profit = currentPrice - entryPrice;
-      } else {
-         profit = entryPrice - currentPrice;
-      }
-      
-      m_logger.Debug(StringFormat("Tentando aplicar trailing stop para ticket %d: %.1f pontos, Lucro atual: %.2f",
-                                 ticket, points, profit));
    }
    
    // Obter símbolo da posição
@@ -683,18 +405,13 @@ bool CTradeExecutor::ApplyTrailingStop(ulong ticket, double points)
       double takeProfit = PositionGetDouble(POSITION_TP);
       
       // Verificar se o novo stop loss é melhor que o atual
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
       bool isImprovement = false;
       
       if(posType == POSITION_TYPE_BUY && (currentStopLoss < newStopLoss || currentStopLoss == 0)) {
          isImprovement = true;
       } else if(posType == POSITION_TYPE_SELL && (currentStopLoss > newStopLoss || currentStopLoss == 0)) {
          isImprovement = true;
-      }
-      
-      // ADICIONAR: Log de debug para resultado do cálculo
-      if(m_logger != NULL) {
-         m_logger.Debug(StringFormat("Trailing stop calculado: %.5f, Stop atual: %.5f, Melhoria: %s",
-                                    newStopLoss, currentStopLoss, isImprovement ? "Sim" : "Não"));
       }
       
       // Modificar posição se o novo stop loss for melhor
@@ -709,7 +426,6 @@ bool CTradeExecutor::ApplyTrailingStop(ulong ticket, double points)
    
    return false;
 }
-
 
 //+------------------------------------------------------------------+
 //| Aplicar trailing stop baseado em ATR                             |
@@ -908,10 +624,9 @@ bool CTradeExecutor::ApplyMATrailingStop(ulong ticket, string symbol, ENUM_TIMEF
 }
 
 //+------------------------------------------------------------------+
-//| Função ManageOpenPositions corrigida com intervalo reduzido       |
+//| Gerenciar posições abertas                                       |
 //+------------------------------------------------------------------+
-void CTradeExecutor::ManageOpenPositions()
-{
+void CTradeExecutor::ManageOpenPositions() {
    // Verificar se trading está permitido
    if(!m_tradeAllowed) {
       return;
@@ -939,8 +654,8 @@ void CTradeExecutor::ManageOpenPositions()
          continue;
       }
       
-      // Verificar se é hora de atualizar (a cada 3 segundos em vez de 10)
-      if(currentTime - m_trailingConfigs[i].lastUpdateTime < 3) {
+      // Verificar se é hora de atualizar (a cada 10 segundos)
+      if(currentTime - m_trailingConfigs[i].lastUpdateTime < 10) {
          continue;
       }
       
@@ -991,7 +706,6 @@ void CTradeExecutor::ManageOpenPositions()
       }
    }
 }
-
 
 //+------------------------------------------------------------------+
 //| Verificar se o erro é recuperável                                |
@@ -1327,4 +1041,258 @@ double CTradeExecutor::CalculateMATrailingStop(string symbol, ENUM_TIMEFRAMES ti
 //+------------------------------------------------------------------+
 
 #endif // TRADEEXECUTOR_MQH
+
+//+------------------------------------------------------------------+
+//| Método ExecuteInBatches para execução de ordens em lotes menores |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::ExecuteInBatches(OrderRequest &request, double maxBatchSize = 1.0)
+{
+   // Verificar se trading está permitido
+   if(!m_tradeAllowed) {
+      m_lastError = -1;
+      m_lastErrorDesc = "Trading não está habilitado";
+      if(m_logger != NULL) {
+         m_logger.Warning(m_lastErrorDesc);
+      }
+      return false;
+   }
+   
+   // Verificar parâmetros
+   if(request.symbol == "" || request.volume <= 0 || maxBatchSize <= 0) {
+      m_lastError = -2;
+      m_lastErrorDesc = "Parâmetros de ordem inválidos";
+      if(m_logger != NULL) {
+         m_logger.Error(m_lastErrorDesc);
+      }
+      return false;
+   }
+   
+   // Registrar detalhes da ordem
+   if(m_logger != NULL) {
+      m_logger.Info(StringFormat("Executando ordem em lotes: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f, Lote máximo: %.2f",
+                                request.symbol,
+                                request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
+                                request.volume,
+                                request.price,
+                                request.stopLoss,
+                                request.takeProfit,
+                                maxBatchSize));
+   }
+   
+   double remainingVolume = request.volume;
+   bool allSuccess = true;
+   int batchCount = 0;
+   
+   while(remainingVolume > 0) {
+      double batchVolume = MathMin(remainingVolume, maxBatchSize);
+      batchCount++;
+      
+      // Criar requisição temporária
+      OrderRequest batchRequest = request;
+      batchRequest.volume = batchVolume;
+      
+      if(m_logger != NULL) {
+         m_logger.Info(StringFormat("Executando lote %d: %.2f de %.2f", batchCount, batchVolume, request.volume));
+      }
+      
+      // Usar o método Execute original para executar o lote
+      bool result = false;
+      int retries = 0;
+      
+      while(retries < m_maxRetries && !result) {
+         if(retries > 0) {
+            if(m_logger != NULL) {
+               m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
+            }
+            Sleep(m_retryDelay);
+         }
+         
+         // Executar ordem de acordo com o tipo
+         switch(batchRequest.type) {
+            case ORDER_TYPE_BUY:
+               result = m_trade.Buy(batchRequest.volume, batchRequest.symbol, batchRequest.price, batchRequest.stopLoss, batchRequest.takeProfit, batchRequest.comment);
+               break;
+            case ORDER_TYPE_SELL:
+               result = m_trade.Sell(batchRequest.volume, batchRequest.symbol, batchRequest.price, batchRequest.stopLoss, batchRequest.takeProfit, batchRequest.comment);
+               break;
+            case ORDER_TYPE_BUY_LIMIT:
+               result = m_trade.BuyLimit(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
+               break;
+            case ORDER_TYPE_SELL_LIMIT:
+               result = m_trade.SellLimit(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
+               break;
+            case ORDER_TYPE_BUY_STOP:
+               result = m_trade.BuyStop(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
+               break;
+            case ORDER_TYPE_SELL_STOP:
+               result = m_trade.SellStop(batchRequest.volume, batchRequest.price, batchRequest.symbol, batchRequest.stopLoss, batchRequest.takeProfit, ORDER_TIME_GTC, 0, batchRequest.comment);
+               break;
+            default:
+               m_lastError = -3;
+               m_lastErrorDesc = "Tipo de ordem não suportado";
+               if(m_logger != NULL) {
+                  m_logger.Error(m_lastErrorDesc);
+               }
+               return false;
+         }
+         
+         // Verificar resultado
+         if(!result) {
+            m_lastError = (int)m_trade.ResultRetcode();
+            m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
+            
+            // Verificar se o erro é recuperável
+            if(!IsRetryableError(m_lastError)) {
+               if(m_logger != NULL) {
+                  m_logger.Error(m_lastErrorDesc);
+               }
+               return false;
+            }
+         }
+         
+         retries++;
+      }
+      
+      if(!result) {
+         if(m_logger != NULL) {
+            m_logger.Error(StringFormat("Falha ao executar lote %d: %.2f", batchCount, batchVolume));
+         }
+         allSuccess = false;
+         break;
+      }
+      
+      remainingVolume -= batchVolume;
+      
+      // Pequena pausa entre ordens
+      if(remainingVolume > 0) {
+         Sleep(100);
+      }
+   }
+   
+   if(allSuccess) {
+      if(m_logger != NULL) {
+         m_logger.Info(StringFormat("Todos os %d lotes executados com sucesso", batchCount));
+      }
+   } else {
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("Execução parcial: %d de %d lotes executados", batchCount - 1, (int)MathCeil(request.volume / maxBatchSize)));
+      }
+   }
+   
+   return allSuccess;
+}
+
+//+------------------------------------------------------------------+
+//| Modificação do método Execute para usar ExecuteInBatches         |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::Execute(OrderRequest &request)
+{
+   // Verificar se o volume é grande e se deve usar execução em lotes
+   if(request.volume > 1.0) {
+      return ExecuteInBatches(request, 1.0);
+   }
+   
+   // Código original do método Execute para volumes pequenos
+   // Verificar se trading está permitido
+   if(!m_tradeAllowed) {
+      m_lastError = -1;
+      m_lastErrorDesc = "Trading não está habilitado";
+      if(m_logger != NULL) {
+         m_logger.Warning(m_lastErrorDesc);
+      }
+      return false;
+   }
+   
+   // Verificar parâmetros
+   if(request.symbol == "" || request.volume <= 0) {
+      m_lastError = -2;
+      m_lastErrorDesc = "Parâmetros de ordem inválidos";
+      if(m_logger != NULL) {
+         m_logger.Error(m_lastErrorDesc);
+      }
+      return false;
+   }
+   
+   // Registrar detalhes da ordem
+   if(m_logger != NULL) {
+      m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
+                                request.symbol,
+                                request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
+                                request.volume,
+                                request.price,
+                                request.stopLoss,
+                                request.takeProfit));
+   }
+   
+   // Executar ordem com retry
+   bool result = false;
+   int retries = 0;
+   
+   while(retries < m_maxRetries && !result) {
+      if(retries > 0) {
+         if(m_logger != NULL) {
+            m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
+         }
+         Sleep(m_retryDelay);
+      }
+      
+      // Executar ordem de acordo com o tipo
+      switch(request.type) {
+         case ORDER_TYPE_BUY:
+            result = m_trade.Buy(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
+            break;
+         case ORDER_TYPE_SELL:
+            result = m_trade.Sell(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
+            break;
+         case ORDER_TYPE_BUY_LIMIT:
+            result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+            break;
+         case ORDER_TYPE_SELL_LIMIT:
+            result = m_trade.SellLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+            break;
+         case ORDER_TYPE_BUY_STOP:
+            result = m_trade.BuyStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+            break;
+         case ORDER_TYPE_SELL_STOP:
+            result = m_trade.SellStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+            break;
+         default:
+            m_lastError = -3;
+            m_lastErrorDesc = "Tipo de ordem não suportado";
+            if(m_logger != NULL) {
+               m_logger.Error(m_lastErrorDesc);
+            }
+            return false;
+      }
+      
+      // Verificar resultado
+      if(!result) {
+         m_lastError = (int)m_trade.ResultRetcode();
+         m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
+         
+         // Verificar se o erro é recuperável
+         if(!IsRetryableError(m_lastError)) {
+            if(m_logger != NULL) {
+               m_logger.Error(m_lastErrorDesc);
+            }
+            return false;
+         }
+      }
+      
+      retries++;
+   }
+   
+   // Verificar resultado final
+   if(result) {
+      if(m_logger != NULL) {
+         m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", m_trade.ResultOrder()));
+      }
+      return true;
+   } else {
+      if(m_logger != NULL) {
+         m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
+      }
+      return false;
+   }
+}
 
