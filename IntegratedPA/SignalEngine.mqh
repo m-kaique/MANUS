@@ -13,7 +13,7 @@
 #include "Logger.mqh"
 #include "MarketContext.mqh"
 #include "SetupClassifier.mqh"
-
+#include "IndicatorManager.mqh"
 // Strategies
 #include "strategies/SpikeAndChannel.mqh"
 
@@ -56,49 +56,14 @@ struct ValidationCache
    }
 };
 
-// //+------------------------------------------------------------------+
-// //| Classe RAII para gerenciamento de handles de indicadores         |
-// //+------------------------------------------------------------------+
-// class CIndicatorHandle
-// {
-// private:
-//    int m_handle;
-
-// public:
-//    CIndicatorHandle() : m_handle(INVALID_HANDLE) {}
-
-//    ~CIndicatorHandle()
-//    {
-//       Release();
-//    }
-
-//    void SetHandle(int handle)
-//    {
-//       Release(); // Libera handle anterior se existir
-//       m_handle = handle;
-//    }
-
-//    int GetHandle() const { return m_handle; }
-
-//    bool IsValid() const { return m_handle != INVALID_HANDLE; }
-
-//    void Release()
-//    {
-//       if (m_handle != INVALID_HANDLE)
-//       {
-//          IndicatorRelease(m_handle);
-//          m_handle = INVALID_HANDLE;
-//       }
-//    }
-// };
-
 //+------------------------------------------------------------------+
 //| Classe para geração de sinais de trading                         |
 //+------------------------------------------------------------------+
 class CSignalEngine
 {
 private:
-   CLogger *m_logger;
+   CLogger *m_logger; 
+   CIndicatorManager *m_IndicatorManager;
    CMarketContext *m_marketContext;
    CSetupClassifier *m_setupClassifier;
    // CACHE SPIKE AND CHANNEL
@@ -148,8 +113,7 @@ private:
    bool PerformFullValidation(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
    ENUM_TIMEFRAMES NormalizeTimeframe(ENUM_TIMEFRAMES timeframe);
    bool ValidateBasicParameters(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
-   bool ValidateMarketData(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
-   bool ValidateIndicatorAccess(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
+   bool ValidateMarketData(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod); 
    void LogValidationResult(bool result, string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod);
 
    // Métodos privados para estratégias específicas de tendência
@@ -168,7 +132,7 @@ private:
 public:
    // Construtores e destrutor
    CSignalEngine();
-   CSignalEngine(CLogger *logger, CMarketContext *marketContext);
+   CSignalEngine(CLogger *logger, CMarketContext *marketContext, CIndicatorManager *indicatorManager);
    ~CSignalEngine();
 
    // Método de inicialização
@@ -203,7 +167,8 @@ CSignalEngine::CSignalEngine()
 {
    m_logger = NULL;
    m_marketContext = NULL;
-   m_setupClassifier = NULL;
+   m_IndicatorManager = NULL;
+   m_setupClassifier = NULL; 
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_validationCache = ValidationCache();
@@ -215,11 +180,12 @@ CSignalEngine::CSignalEngine()
 //+------------------------------------------------------------------+
 //| Construtor com parâmetros                                        |
 //+------------------------------------------------------------------+
-CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext)
+CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext, CIndicatorManager *indicatorManager)
 {
    m_logger = logger;
    m_marketContext = marketContext;
    m_setupClassifier = NULL;
+   m_IndicatorManager = indicatorManager;
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_validationCache = ValidationCache();
@@ -516,103 +482,6 @@ bool CSignalEngine::ValidateMarketData(string symbol, ENUM_TIMEFRAMES timeframe,
          if (m_logger != NULL)
             m_logger.Error("SignalEngine: " + context + "Dados OHLC inválidos para " + symbol);
          return false;
-      }
-   }
-
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Valida acesso a indicadores                                      |
-//+------------------------------------------------------------------+
-bool CSignalEngine::ValidateIndicatorAccess(string symbol, ENUM_TIMEFRAMES timeframe, string callingMethod)
-{
-   string context = (callingMethod != "") ? callingMethod + ": " : "";
-
-   CIndicatorHandle maHandle;
-   maHandle.SetHandle(iMA(symbol, timeframe, 20, 0, MODE_EMA, PRICE_CLOSE));
-
-   if (!maHandle.IsValid())
-   {
-      if (m_logger != NULL)
-         m_logger.Error("SignalEngine: " + context + "Falha ao criar indicador para " + symbol);
-      return false;
-   }
-
-   // *** CORREÇÃO PRINCIPAL: Verificar se o indicador está pronto ***
-   int calculated = BarsCalculated(maHandle.GetHandle());
-   if(calculated < 0) {
-      if (m_logger != NULL)
-         m_logger.Warning("SignalEngine: " + context + "Indicador não calculado para " + symbol + " (BarsCalculated: " + IntegerToString(calculated) + ")");
-      return false;
-   }
-   
-   if(calculated < 50) { // Precisamos de pelo menos 50 barras calculadas
-      if (m_logger != NULL)
-         m_logger.Warning("SignalEngine: " + context + "Indicador com poucas barras calculadas para " + symbol + " (" + IntegerToString(calculated) + "/50)");
-      return false;
-   }
-
-   // *** TENTATIVA COM RETRY E TIMEOUT ***
-   double maBuffer[];
-   ArraySetAsSeries(maBuffer, true);
-   
-   int attempts = 0;
-   int maxAttempts = 3;
-   int copied = 0;
-   
-   while(attempts < maxAttempts) {
-      ResetLastError();
-      copied = CopyBuffer(maHandle.GetHandle(), 0, 0, 3, maBuffer);
-      
-      if(copied > 0) {
-         break; // Sucesso!
-      }
-      
-      int error = GetLastError();
-      attempts++;
-      
-      if(error == 4806) { // ERR_INDICATOR_DATA_NOT_FOUND
-         if (m_logger != NULL) {
-            m_logger.Debug("SignalEngine: " + context + "Tentativa " + IntegerToString(attempts) + "/" + IntegerToString(maxAttempts) + 
-                         " - Dados do indicador não encontrados para " + symbol + " (erro 4806)");
-         }
-         
-         if(attempts < maxAttempts) {
-            Sleep(10); // Aguardar 10ms antes da próxima tentativa
-            continue;
-         }
-      } else {
-         // Outro tipo de erro
-         if (m_logger != NULL) {
-            m_logger.Error("SignalEngine: " + context + "Erro diferente de 4806 ao copiar dados de indicador para " +
-                         symbol + " - Erro: " + IntegerToString(error));
-         }
-         return false;
-      }
-   }
-   
-   if(copied <= 0) {
-      if (m_logger != NULL) {
-         m_logger.Warning("SignalEngine: " + context + "Falha ao copiar dados de indicador para " + symbol + 
-                        " após " + IntegerToString(maxAttempts) + " tentativas - Erro: " + IntegerToString(GetLastError()));
-      }
-      return false;
-   }
-
-   // *** VERIFICAÇÃO DE SPREAD (warning apenas) ***
-   MqlTick tick;
-   if (SymbolInfoTick(symbol, tick))
-   {
-      double spread = tick.ask - tick.bid;
-      double maxSpread = GetMaxAllowedSpread(symbol);
-
-      if (spread > maxSpread)
-      {
-         if (m_logger != NULL)
-            m_logger.Warning("SignalEngine: " + context + "Spread elevado para " + symbol +
-                             ": " + DoubleToString(spread, 5) +
-                             " (máx: " + DoubleToString(maxSpread, 5) + ")");
       }
    }
 
