@@ -56,41 +56,41 @@ struct ValidationCache
    }
 };
 
-//+------------------------------------------------------------------+
-//| Classe RAII para gerenciamento de handles de indicadores         |
-//+------------------------------------------------------------------+
-class CIndicatorHandle
-{
-private:
-   int m_handle;
+// //+------------------------------------------------------------------+
+// //| Classe RAII para gerenciamento de handles de indicadores         |
+// //+------------------------------------------------------------------+
+// class CIndicatorHandle
+// {
+// private:
+//    int m_handle;
 
-public:
-   CIndicatorHandle() : m_handle(INVALID_HANDLE) {}
+// public:
+//    CIndicatorHandle() : m_handle(INVALID_HANDLE) {}
 
-   ~CIndicatorHandle()
-   {
-      Release();
-   }
+//    ~CIndicatorHandle()
+//    {
+//       Release();
+//    }
 
-   void SetHandle(int handle)
-   {
-      Release(); // Libera handle anterior se existir
-      m_handle = handle;
-   }
+//    void SetHandle(int handle)
+//    {
+//       Release(); // Libera handle anterior se existir
+//       m_handle = handle;
+//    }
 
-   int GetHandle() const { return m_handle; }
+//    int GetHandle() const { return m_handle; }
 
-   bool IsValid() const { return m_handle != INVALID_HANDLE; }
+//    bool IsValid() const { return m_handle != INVALID_HANDLE; }
 
-   void Release()
-   {
-      if (m_handle != INVALID_HANDLE)
-      {
-         IndicatorRelease(m_handle);
-         m_handle = INVALID_HANDLE;
-      }
-   }
-};
+//    void Release()
+//    {
+//       if (m_handle != INVALID_HANDLE)
+//       {
+//          IndicatorRelease(m_handle);
+//          m_handle = INVALID_HANDLE;
+//       }
+//    }
+// };
 
 //+------------------------------------------------------------------+
 //| Classe para geração de sinais de trading                         |
@@ -713,7 +713,7 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
       signal.timeframe = normalizedTimeframe; // Garantir que o timeframe está setado
 
       if (m_logger != NULL)
-         m_logger.LogSignal(signal);
+          m_logger.Info("SignalEngine: Sinal gerado para " + symbol + " é válido!");
    }
    else if (signal.id > 0)
    {

@@ -10,87 +10,111 @@
 #include "Structures.mqh"
 
 //+------------------------------------------------------------------+
-//| Classe para gerenciamento de logs                                |
+//| Classe CLogger modificada com buffer para exportação CSV          |
 //+------------------------------------------------------------------+
-class CLogger {
+class CLogger
+{
 private:
-   string         m_logFileName;      // Nome do arquivo de log
-   int            m_logFileHandle;    // Handle do arquivo de log
-   ENUM_LOG_LEVEL m_logLevel;         // Nível de log atual
-   bool           m_consoleOutput;    // Flag para saída no console
-   bool           m_fileOutput;       // Flag para saída em arquivo
-   string         m_eaName;           // Nome do EA para identificação nos logs
+   // Propriedades existentes
+   string          m_logFileName;
+   int             m_logFileHandle;
+   ENUM_LOG_LEVEL  m_logLevel;
+   bool            m_consoleOutput;
+   bool            m_fileOutput;
+   string          m_eaName;
    
-   // Método privado para formatar mensagem de log
+   // ADICIONAR: Buffer para armazenar logs
+   string          m_logBuffer[];  // Buffer para armazenar logs
+   int             m_bufferSize;   // Tamanho atual do buffer
+   int             m_maxBufferSize; // Tamanho máximo do buffer
+   
+   // Método para formatar mensagem de log
    string FormatLogMessage(ENUM_LOG_LEVEL level, string message);
    
-   // Método privado para escrever no arquivo de log
-   bool WriteToLogFile(string message);
+   // Método para escrever no arquivo de log
+   void WriteToLogFile(string message);
    
+   // ADICIONAR: Método para adicionar ao buffer
+   void AddToBuffer(string message) {
+      if(m_bufferSize >= m_maxBufferSize) {
+         // Rotacionar buffer se necessário
+         for(int i = 0; i < m_maxBufferSize - 1; i++) {
+            m_logBuffer[i] = m_logBuffer[i + 1];
+         }
+         m_logBuffer[m_maxBufferSize - 1] = message;
+      } else {
+         ArrayResize(m_logBuffer, m_bufferSize + 1);
+         m_logBuffer[m_bufferSize] = message;
+         m_bufferSize++;
+      }
+   }
+
 public:
-   // Construtores e destrutores
-   CLogger();
-   CLogger(string logFileName, string eaName = "IntegratedPA_EA", ENUM_LOG_LEVEL logLevel = LOG_LEVEL_INFO);
+   // Construtores e destrutor
+   CLogger(string logFileName = "EA_Log.txt", ENUM_LOG_LEVEL logLevel = LOG_LEVEL_INFO);
    ~CLogger();
    
-   // Métodos de inicialização e configuração
-   bool Initialize(string logFileName, string eaName = "IntegratedPA_EA", ENUM_LOG_LEVEL logLevel = LOG_LEVEL_INFO);
-   void SetLogLevel(ENUM_LOG_LEVEL logLevel);
-   void EnableConsoleOutput(bool enable);
-   void EnableFileOutput(bool enable);
+   // Métodos de inicialização
+   bool Initialize(string eaName = "EA");
    
-   // Métodos de logging
+   // Métodos de configuração
+   void SetLogLevel(ENUM_LOG_LEVEL level) { m_logLevel = level; }
+   void EnableConsoleOutput(bool enable) { m_consoleOutput = enable; }
+   void EnableFileOutput(bool enable) { m_fileOutput = enable; }
+   
+   // Métodos de log
    void Debug(string message);
    void Info(string message);
    void Warning(string message);
    void Error(string message);
    
-   // Métodos específicos para trading
-   void LogSignal(const Signal &signal);
-   void LogTrade(int ticket, string action, double price, double volume);
-   void LogPosition(int ticket, double profit, double drawdown);
-   void LogPerformance(int totalTrades, int winTrades, double profitFactor);
-   void LogSetupClassification(string symbol, SETUP_QUALITY quality, int factors, double riskReward);
-   void LogSpreadWarning(string symbol, double currentSpread, double avgSpread, double multiple);
-   
-   // Métodos para exportação
-   bool ExportToCSV(string fileName, string headers, string data);
-   
-   // Sistema de alertas
-   void SendAlert(string message, bool notifyTerminal = true, bool sendEmail = false, bool pushNotification = false);
+   // MODIFICAR: Método ExportToCSV
+   bool ExportToCSV(string fileName) {
+      int fileHandle = FileOpen(fileName, FILE_WRITE | FILE_CSV | FILE_ANSI);
+      
+      if(fileHandle == INVALID_HANDLE) {
+         Error("Falha ao abrir arquivo CSV para exportação: " + IntegerToString(GetLastError()));
+         return false;
+      }
+      
+      // Escrever cabeçalho
+      FileWrite(fileHandle, "Timestamp,Level,Message");
+      
+      // Escrever todos os logs do buffer
+      for(int i = 0; i < m_bufferSize; i++) {
+         FileWrite(fileHandle, m_logBuffer[i]);
+      }
+      
+      FileClose(fileHandle);
+      
+      Info(StringFormat("Logs exportados para %s: %d entradas", fileName, m_bufferSize));
+      
+      return true;
+   }
 };
 
 //+------------------------------------------------------------------+
-//| Construtor padrão                                                |
+//| Construtor                                                       |
 //+------------------------------------------------------------------+
-CLogger::CLogger() {
-   m_logFileName = "IntegratedPA_EA.log";
-   m_logFileHandle = INVALID_HANDLE;
-   m_logLevel = LOG_LEVEL_INFO;
-   m_consoleOutput = true;
-   m_fileOutput = true;
-   m_eaName = "IntegratedPA_EA";
-}
-
-//+------------------------------------------------------------------+
-//| Construtor com parâmetros                                        |
-//+------------------------------------------------------------------+
-CLogger::CLogger(string logFileName, string eaName = "IntegratedPA_EA", ENUM_LOG_LEVEL logLevel = LOG_LEVEL_INFO) {
+CLogger::CLogger(string logFileName = "EA_Log.txt", ENUM_LOG_LEVEL logLevel = LOG_LEVEL_INFO)
+{
    m_logFileName = logFileName;
-   m_logFileHandle = INVALID_HANDLE;
    m_logLevel = logLevel;
+   m_logFileHandle = INVALID_HANDLE;
    m_consoleOutput = true;
    m_fileOutput = true;
-   m_eaName = eaName;
+   m_eaName = "EA";
    
-   Initialize(logFileName, eaName, logLevel);
+   // ADICIONAR: Inicializar buffer
+   m_bufferSize = 0;
+   m_maxBufferSize = 1000; // Armazenar até 1000 logs
 }
 
 //+------------------------------------------------------------------+
 //| Destrutor                                                        |
 //+------------------------------------------------------------------+
-CLogger::~CLogger() {
-   // Fechar o arquivo de log se estiver aberto
+CLogger::~CLogger()
+{
    if(m_logFileHandle != INVALID_HANDLE) {
       FileClose(m_logFileHandle);
       m_logFileHandle = INVALID_HANDLE;
@@ -98,20 +122,12 @@ CLogger::~CLogger() {
 }
 
 //+------------------------------------------------------------------+
-//| Inicializa o logger                                              |
+//| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CLogger::Initialize(string logFileName, string eaName = "IntegratedPA_EA", ENUM_LOG_LEVEL logLevel = LOG_LEVEL_INFO) {
-   m_logFileName = logFileName;
-   m_logLevel = logLevel;
+bool CLogger::Initialize(string eaName = "EA")
+{
    m_eaName = eaName;
    
-   // Fechar o arquivo se já estiver aberto
-   if(m_logFileHandle != INVALID_HANDLE) {
-      FileClose(m_logFileHandle);
-      m_logFileHandle = INVALID_HANDLE;
-   }
-   
-   // Abrir o arquivo de log
    if(m_fileOutput) {
       m_logFileHandle = FileOpen(m_logFileName, FILE_WRITE | FILE_TXT | FILE_ANSI);
       
@@ -119,84 +135,61 @@ bool CLogger::Initialize(string logFileName, string eaName = "IntegratedPA_EA", 
          Print("Erro ao abrir arquivo de log: ", GetLastError());
          return false;
       }
-      
-      // Escrever cabeçalho do log
-      string header = "=== " + m_eaName + " Log iniciado em " + TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES | TIME_SECONDS) + " ===";
-      FileWrite(m_logFileHandle, header);
-      FileFlush(m_logFileHandle);
    }
    
+   Info("Logger inicializado");
    return true;
 }
 
 //+------------------------------------------------------------------+
-//| Define o nível de log                                            |
+//| Formatar mensagem de log                                         |
 //+------------------------------------------------------------------+
-void CLogger::SetLogLevel(ENUM_LOG_LEVEL logLevel) {
-   m_logLevel = logLevel;
-}
-
-//+------------------------------------------------------------------+
-//| Habilita/desabilita saída no console                             |
-//+------------------------------------------------------------------+
-void CLogger::EnableConsoleOutput(bool enable) {
-   m_consoleOutput = enable;
-}
-
-//+------------------------------------------------------------------+
-//| Habilita/desabilita saída em arquivo                             |
-//+------------------------------------------------------------------+
-void CLogger::EnableFileOutput(bool enable) {
-   m_fileOutput = enable;
-   
-   // Se estiver habilitando e o arquivo não estiver aberto, abrir
-   if(enable && m_logFileHandle == INVALID_HANDLE) {
-      Initialize(m_logFileName, m_eaName, m_logLevel);
-   }
-   
-   // Se estiver desabilitando e o arquivo estiver aberto, fechar
-   if(!enable && m_logFileHandle != INVALID_HANDLE) {
-      FileClose(m_logFileHandle);
-      m_logFileHandle = INVALID_HANDLE;
-   }
-}
-
-//+------------------------------------------------------------------+
-//| Formata mensagem de log                                          |
-//+------------------------------------------------------------------+
-string CLogger::FormatLogMessage(ENUM_LOG_LEVEL level, string message) {
-   string levelStr = "";
+string CLogger::FormatLogMessage(ENUM_LOG_LEVEL level, string message)
+{
+   string levelStr;
    
    switch(level) {
-      case LOG_LEVEL_DEBUG:   levelStr = "DEBUG"; break;
-      case LOG_LEVEL_INFO:    levelStr = "INFO"; break;
-      case LOG_LEVEL_WARNING: levelStr = "WARNING"; break;
-      case LOG_LEVEL_ERROR:   levelStr = "ERROR"; break;
-      default:                levelStr = "UNKNOWN";
+      case LOG_LEVEL_DEBUG:
+         levelStr = "DEBUG";
+         break;
+      case LOG_LEVEL_INFO:
+         levelStr = "INFO";
+         break;
+      case LOG_LEVEL_WARNING:
+         levelStr = "WARNING";
+         break;
+      case LOG_LEVEL_ERROR:
+         levelStr = "ERROR";
+         break;
+      default:
+         levelStr = "UNKNOWN";
    }
    
-   string timestamp = TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES | TIME_SECONDS);
-   return "[" + timestamp + "] [" + levelStr + "] " + message;
+   return StringFormat("[%s] [%s] [%s] %s", 
+                      TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+                      m_eaName,
+                      levelStr,
+                      message);
 }
 
 //+------------------------------------------------------------------+
-//| Escreve no arquivo de log                                        |
+//| Escrever no arquivo de log                                       |
 //+------------------------------------------------------------------+
-bool CLogger::WriteToLogFile(string message) {
+void CLogger::WriteToLogFile(string message)
+{
    if(!m_fileOutput || m_logFileHandle == INVALID_HANDLE) {
-      return false;
+      return;
    }
    
    FileWrite(m_logFileHandle, message);
    FileFlush(m_logFileHandle);
-   
-   return true;
 }
 
 //+------------------------------------------------------------------+
 //| Log de nível DEBUG                                               |
 //+------------------------------------------------------------------+
-void CLogger::Debug(string message) {
+void CLogger::Debug(string message)
+{
    if(m_logLevel > LOG_LEVEL_DEBUG) {
       return;
    }
@@ -208,12 +201,19 @@ void CLogger::Debug(string message) {
    }
    
    WriteToLogFile(formattedMessage);
+   
+   // ADICIONAR: Salvar no buffer para CSV
+   string csvLine = StringFormat("%s,DEBUG,\"%s\"", 
+                               TimeToString(TimeCurrent()), 
+                               message);
+   AddToBuffer(csvLine);
 }
 
 //+------------------------------------------------------------------+
 //| Log de nível INFO                                                |
 //+------------------------------------------------------------------+
-void CLogger::Info(string message) {
+void CLogger::Info(string message)
+{
    if(m_logLevel > LOG_LEVEL_INFO) {
       return;
    }
@@ -225,12 +225,19 @@ void CLogger::Info(string message) {
    }
    
    WriteToLogFile(formattedMessage);
+   
+   // ADICIONAR: Salvar no buffer para CSV
+   string csvLine = StringFormat("%s,INFO,\"%s\"", 
+                               TimeToString(TimeCurrent()), 
+                               message);
+   AddToBuffer(csvLine);
 }
 
 //+------------------------------------------------------------------+
 //| Log de nível WARNING                                             |
 //+------------------------------------------------------------------+
-void CLogger::Warning(string message) {
+void CLogger::Warning(string message)
+{
    if(m_logLevel > LOG_LEVEL_WARNING) {
       return;
    }
@@ -242,12 +249,19 @@ void CLogger::Warning(string message) {
    }
    
    WriteToLogFile(formattedMessage);
+   
+   // ADICIONAR: Salvar no buffer para CSV
+   string csvLine = StringFormat("%s,WARNING,\"%s\"", 
+                               TimeToString(TimeCurrent()), 
+                               message);
+   AddToBuffer(csvLine);
 }
 
 //+------------------------------------------------------------------+
 //| Log de nível ERROR                                               |
 //+------------------------------------------------------------------+
-void CLogger::Error(string message) {
+void CLogger::Error(string message)
+{
    if(m_logLevel > LOG_LEVEL_ERROR) {
       return;
    }
@@ -259,147 +273,11 @@ void CLogger::Error(string message) {
    }
    
    WriteToLogFile(formattedMessage);
+   
+   // ADICIONAR: Salvar no buffer para CSV
+   string csvLine = StringFormat("%s,ERROR,\"%s\"", 
+                               TimeToString(TimeCurrent()), 
+                               message);
+   AddToBuffer(csvLine);
 }
 
-//+------------------------------------------------------------------+
-//| Log de sinal de trading                                          |
-//+------------------------------------------------------------------+
-void CLogger::LogSignal(const Signal &signal) {
-   string direction = (signal.direction == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   string phase = "";
-   
-   switch(signal.marketPhase) {
-      case PHASE_TREND:    phase = "TREND"; break;
-      case PHASE_RANGE:    phase = "RANGE"; break;
-      case PHASE_REVERSAL: phase = "REVERSAL"; break;
-      default:             phase = "UNDEFINED";
-   }
-   
-   string quality = "";
-   
-   switch(signal.quality) {
-      case SETUP_A_PLUS: quality = "A+"; break;
-      case SETUP_A:      quality = "A"; break;
-      case SETUP_B:      quality = "B"; break;
-      case SETUP_C:      quality = "C"; break;
-      default:           quality = "UNKNOWN";
-   }
-   
-   string message = StringFormat(
-      "SIGNAL [%d] %s %s (Quality: %s) - Entry: %.5f, SL: %.5f, TP1: %.5f, R:R: %.2f, Strategy: %s, Desc: %s",
-      signal.id,
-      direction,
-      phase,
-      quality,
-      signal.entryPrice,
-      signal.stopLoss,
-      signal.takeProfits[0],
-      signal.riskRewardRatio,
-      signal.strategy,
-      signal.description
-   );
-   
-   Info(message);
-}
-
-//+------------------------------------------------------------------+
-//| Log de operação                                                  |
-//+------------------------------------------------------------------+
-void CLogger::LogTrade(int ticket, string action, double price, double volume) {
-   string message = StringFormat(
-      "TRADE [%d] %s - Price: %.5f, Volume: %.2f",
-      ticket,
-      action,
-      price,
-      volume
-   );
-   
-   Info(message);
-}
-
-//+------------------------------------------------------------------+
-//| Log de posição                                                   |
-//+------------------------------------------------------------------+
-void CLogger::LogPosition(int ticket, double profit, double drawdown) {
-   string message = StringFormat(
-      "POSITION [%d] - Profit: %.2f, Max Drawdown: %.2f",
-      ticket,
-      profit,
-      drawdown
-   );
-   
-   Info(message);
-}
-
-//+------------------------------------------------------------------+
-//| Log de desempenho                                                |
-//+------------------------------------------------------------------+
-void CLogger::LogPerformance(int totalTrades, int winTrades, double profitFactor) {
-   double winRate = (totalTrades > 0) ? (double)winTrades / totalTrades * 100.0 : 0.0;
-   
-   string message = StringFormat(
-      "PERFORMANCE - Total Trades: %d, Win Trades: %d, Win Rate: %.2f%%, Profit Factor: %.2f",
-      totalTrades,
-      winTrades,
-      winRate,
-      profitFactor
-   );
-   
-   Info(message);
-}
-
-//+------------------------------------------------------------------+
-//| Exporta dados para CSV                                           |
-//+------------------------------------------------------------------+
-bool CLogger::ExportToCSV(string fileName, string headers, string data) {
-   // Abrir arquivo CSV
-   int fileHandle = FileOpen(fileName, FILE_WRITE | FILE_CSV | FILE_ANSI);
-   
-   if(fileHandle == INVALID_HANDLE) {
-      Error(StringFormat("Erro ao abrir arquivo CSV %s: %d", fileName, GetLastError()));
-      return false;
-   }
-   
-   // Escrever cabeçalhos
-   FileWrite(fileHandle, headers);
-   
-   // Escrever dados
-   FileWrite(fileHandle, data);
-   
-   // Fechar arquivo
-   FileClose(fileHandle);
-   
-   Info(StringFormat("Dados exportados para %s", fileName));
-   
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Envia alertas                                                    |
-//+------------------------------------------------------------------+
-void CLogger::SendAlert(string message, bool notifyTerminal = true, bool sendEmail = false, bool pushNotification = false) {
-   // Formatar mensagem
-   string formattedMessage = m_eaName + ": " + message;
-   
-   // Notificação no terminal
-   if(notifyTerminal) {
-      Alert(formattedMessage);
-   }
-   
-   // Email
-   if(sendEmail) {
-      if(!SendMail(m_eaName + " Alert", formattedMessage)) {
-         Error(StringFormat("Erro ao enviar email: %d", GetLastError()));
-      }
-   }
-   
-   // Notificação push
-   if(pushNotification) {
-      if(!SendNotification(formattedMessage)) {
-         Error(StringFormat("Erro ao enviar notificação push: %d", GetLastError()));
-      }
-   }
-   
-   // Registrar alerta no log
-   Info("ALERT: " + message);
-}

@@ -216,21 +216,21 @@
 #define WIN_CHANNEL_MAX_STOP        500   // Stop máximo durante canal
 #define WIN_FIRST_TARGET            100   // Primeiro alvo
 #define WIN_SECOND_TARGET           200  // Segundo alvo
-#define WIN_TRAILING_STOP           500   // Trailing stop
+#define WIN_TRAILING_STOP           300   // Trailing stop
 
 // WDO (Mini Dólar) - Valores em pontos
 #define WDO_SPIKE_MAX_STOP          7     // Stop máximo durante spike
 #define WDO_CHANNEL_MAX_STOP        5     // Stop máximo durante canal
 #define WDO_FIRST_TARGET            15    // Primeiro alvo
 #define WDO_SECOND_TARGET           30    // Segundo alvo
-#define WDO_TRAILING_STOP           12    // Trailing stop
+#define WDO_TRAILING_STOP           8    // Trailing stop
 
 // BTC (Bitcoin Futuros) - Valores em USD
 #define BTC_SPIKE_MAX_STOP          700   // Stop máximo durante spike
 #define BTC_CHANNEL_MAX_STOP        500   // Stop máximo durante canal
 #define BTC_FIRST_TARGET            1250  // Primeiro alvo
 #define BTC_SECOND_TARGET           3000  // Segundo alvo
-#define BTC_TRAILING_STOP           900   // Trailing stop
+#define BTC_TRAILING_STOP           500   // Trailing stop
 
 //------ Additional Strategy Constants ------
 

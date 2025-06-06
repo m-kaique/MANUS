@@ -25,6 +25,7 @@
 #include "TradeExecutor.mqh"
 #include "Logger.mqh"
 #include "Utils.mqh"
+#include "IndicatorManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -58,6 +59,7 @@ CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
 CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
+CIndicatorManager *g_indicadorManager = NULL;
 
 // Variáveis globais para otimização:
 // Variáveis globais para otimização
@@ -354,6 +356,17 @@ int OnInit()
    }
 
    // Inicializar componentes
+
+   g_indicadorManager = new CIndicatorManager();
+   if (g_indicadorManager == NULL)
+   {
+      g_logger.Error("Erro ao criar objeto IndicatorHandle");
+      return (INIT_FAILED);
+   }
+
+   g_indicadorManager.Initialize(g_logger); // ALTERAR PARA O PADRAO DE INICIALIZACAO COM AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+   
+   //
    g_marketContext = new CMarketContext();
    if (g_marketContext == NULL)
    {
@@ -478,7 +491,8 @@ void OnDeinit(const int reason)
    // Exportar logs finais
    if (g_logger != NULL)
    {
-      g_logger.ExportToCSV("IntegratedPA_EA_log.csv", "Timestamp,Level,Message", "");
+      // MODIFICAR: Chamar ExportToCSV sem parâmetros extras
+      g_logger.ExportToCSV("IntegratedPA_EA_log.csv");
    }
 
    // Liberar memória (na ordem inversa da inicialização)
@@ -506,6 +520,11 @@ void OnDeinit(const int reason)
       g_marketContext = NULL;
    }
 
+   if(g_indicadorManager != NULL){
+      delete g_indicadorManager;
+      g_indicadorManager = NULL;
+   }
+
    // O logger deve ser o último a ser liberado
    if (g_logger != NULL)
    {
@@ -514,6 +533,7 @@ void OnDeinit(const int reason)
       g_logger = NULL;
    }
 }
+
 
 //+------------------------------------------------------------------+
 //| Função principal OnTick - Completamente reescrita               |
@@ -926,11 +946,11 @@ bool ShouldManagePositions(datetime currentTime)
 }
 
 //+------------------------------------------------------------------+
-//| Gerencia posições existentes                                     |
+//| Função ManageExistingPositions corrigida com implementação de parciais |
 //+------------------------------------------------------------------+
 void ManageExistingPositions()
 {
-   if(g_tradeExecutor == NULL) {
+   if(g_tradeExecutor == NULL || g_riskManager == NULL) {
       return;
    }
    
@@ -952,6 +972,40 @@ void ManageExistingPositions()
       if (PositionGetInteger(POSITION_MAGIC) != eaMagicNumber) continue;
       
       string symbol = PositionGetString(POSITION_SYMBOL);
+      double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double stopLoss = PositionGetDouble(POSITION_SL);
+      
+      // ADICIONAR: Verificar parciais ANTES do trailing stop
+      if(g_riskManager.ShouldTakePartial(symbol, ticket, currentPrice, entryPrice, stopLoss)) {
+         double currentVolume = PositionGetDouble(POSITION_VOLUME);
+         ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+         
+         // Calcular R:R atual
+         double stopDistance = MathAbs(entryPrice - stopLoss);
+         double currentDistance = 0;
+         
+         if(posType == POSITION_TYPE_BUY) {
+            currentDistance = currentPrice - entryPrice;
+         } else {
+            currentDistance = entryPrice - currentPrice;
+         }
+         
+         double currentRR = (stopDistance > 0) ? currentDistance / stopDistance : 0;
+         
+         // Obter volume para parcial
+         double partialVolume = g_riskManager.GetPartialVolume(symbol, ticket, currentRR);
+         
+         if(partialVolume > 0 && partialVolume < currentVolume) {
+            if(g_logger != NULL) {
+               g_logger.Info(StringFormat("Executando parcial para ticket %d: %.2f lotes em R:R %.2f",
+                                        ticket, partialVolume, currentRR));
+            }
+            
+            // Executar fechamento parcial
+            g_tradeExecutor.ClosePosition(ticket, partialVolume);
+         }
+      }
       
       // Aplicar trailing stop específico por ativo
       if (StringFind(symbol, "WIN") >= 0) {
@@ -969,6 +1023,7 @@ void ManageExistingPositions()
       g_logger.Debug(StringFormat("Gerenciando %d posições abertas com trailing stop específico por ativo", openPositions));
    }
 }
+
 
 //+------------------------------------------------------------------+
 //| Gera relatórios de performance                                   |
@@ -1054,9 +1109,9 @@ void OnTimer()
 
    // Exportar logs periodicamente (a cada hora)
    datetime currentTime = TimeCurrent();
-   if (currentTime - g_lastExportTime > 60)
-   { // 3600 segundos = 1 hora
-      // g_logger.ExportToCSV("IntegratedPA_EA_log.csv", "Timestamp,Level,Message", "");
+   if (currentTime - g_lastExportTime > 3600) { // 3600 segundos = 1 hora
+      // MODIFICAR: Chamar ExportToCSV sem parâmetros extras
+      g_logger.ExportToCSV("IntegratedPA_EA_log.csv");
       g_lastExportTime = currentTime;
    }
 }
