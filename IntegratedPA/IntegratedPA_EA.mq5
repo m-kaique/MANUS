@@ -285,6 +285,7 @@ int OnInit()
    }
 
    g_logger.Info("=== INICIANDO EXPERT ADVISOR REFATORADO ===");
+   g_logger.SetLogLevel(LOG_LEVEL_DEBUG);
 
    // Verificar compatibilidade
    if (MQLInfoInteger(MQL_TESTER) == false)
