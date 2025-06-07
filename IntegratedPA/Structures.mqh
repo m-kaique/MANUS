@@ -21,11 +21,11 @@ enum MARKET_PHASE {
 //| Enumeração para Classificação de Qualidade de Setup              |
 //+------------------------------------------------------------------+
 enum SETUP_QUALITY {
-   SETUP_INVALID,   // Setup inválido
-   SETUP_A_PLUS,   // Setup de alta qualidade (confluência máxima)
-   SETUP_A,        // Setup de boa qualidade
-   SETUP_B,        // Setup de qualidade média
-   SETUP_C         // Setup de baixa qualidade
+   SETUP_INVALID,   // 0 - Setup inválido
+   SETUP_A_PLUS,    // 1 - Setup de alta qualidade
+   SETUP_A,         // 2 - Setup de boa qualidade
+   SETUP_B,         // 3 - Setup de qualidade média
+   SETUP_C          // 4 - Setup de baixa qualidade
 };
 
 //+------------------------------------------------------------------+

@@ -973,12 +973,16 @@ bool ProcessSignal(string symbol, Signal &signal, MARKET_PHASE phase)
       return false;
    }
 
-   // Filtrar setups de baixa qualidade
-   if (signal.quality == SETUP_C)
+
+   // CORREÇÃO: Usar MinSetupQuality em vez de hardcode
+   if (signal.quality > MinSetupQuality)  // Se qualidade for pior que o mínimo
    {
       if (g_logger != NULL)
       {
-         g_logger.Debug(StringFormat("%s: Setup C descartado", symbol));
+         g_logger.Debug(StringFormat("%s: Setup %s descartado (mínimo: %s)", 
+                                    symbol, 
+                                    EnumToString(signal.quality),
+                                    EnumToString(MinSetupQuality)));
       }
       return false;
    }
