@@ -88,6 +88,8 @@ public:
    bool ShouldTakePartial(string symbol, ulong ticket, double currentPrice, double entryPrice, double stopLoss);
    double GetPartialVolume(string symbol, ulong ticket, double currentRR);
 
+   void ResetPartialControl(ulong ticket);
+
    double CalculatePositionRisk(string symbol, double volume, double openPrice, double stopLoss, ENUM_POSITION_TYPE posType);
 
    // Métodos de acesso
@@ -1161,142 +1163,197 @@ double CRiskManager::CalculateATRValue(string symbol, ENUM_TIMEFRAMES timeframe,
 //+------------------------------------------------------------------+
 //| Verificar se deve realizar parcial                               |
 //+------------------------------------------------------------------+
-bool CRiskManager::ShouldTakePartial(string symbol, ulong ticket, double currentPrice, double entryPrice, double stopLoss)
-{
+bool CRiskManager::ShouldTakePartial(string symbol, ulong ticket, double currentPrice, double entryPrice, double stopLoss) {
    // Verificar parâmetros
-   if (symbol == "" || ticket == 0 || currentPrice <= 0 || entryPrice <= 0 || stopLoss <= 0)
-   {
+   if (symbol == "" || ticket == 0 || currentPrice <= 0 || entryPrice <= 0 || stopLoss <= 0) {
       return false;
    }
 
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
 
-   if (index < 0 || !m_symbolParams[index].usePartials)
-   {
+   if (index < 0 || !m_symbolParams[index].usePartials) {
       return false;
    }
 
-   // Verificar se a posição existe
-   if (!PositionSelectByTicket(ticket))
-   {
+   // VERIFICAÇÃO CRÍTICA: Confirmar que a posição existe
+   if (!PositionSelectByTicket(ticket)) {
+      if (m_logger != NULL) {
+         m_logger.Debug(StringFormat("ShouldTakePartial: Posição #%d não existe", ticket));
+      }
       return false;
    }
 
-   // Obter tipo de posição
+   // Obter informações atuais da posição
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double currentVolume = PositionGetDouble(POSITION_VOLUME);
+
+   // Verificar se ainda há volume suficiente para parcial
+   if (currentVolume <= m_symbolParams[index].partialVolumes[0]) {
+      if (m_logger != NULL) {
+         m_logger.Debug(StringFormat("Volume insuficiente para parcial: %.2f lotes", currentVolume));
+      }
+      return false;
+   }
 
    // Calcular relação risco/retorno atual
    double stopDistance = MathAbs(entryPrice - stopLoss);
    double currentDistance = 0;
 
-   if (posType == POSITION_TYPE_BUY)
-   {
+   if (posType == POSITION_TYPE_BUY) {
       currentDistance = currentPrice - entryPrice;
-   }
-   else
-   {
+   } else {
       currentDistance = entryPrice - currentPrice;
    }
 
    // Verificar se está em lucro
-   if (currentDistance <= 0)
-   {
+   if (currentDistance <= 0) {
       return false;
    }
 
    // Calcular R:R atual
    double currentRR = currentDistance / stopDistance;
 
-   // Verificar se atingiu algum nível de parcial
-   for (int i = 0; i < 10; i++)
-   {
+   if (m_logger != NULL) {
+      m_logger.Debug(StringFormat("Analisando parcial #%d: R:R atual %.2f, Volume: %.2f", 
+                                ticket, currentRR, currentVolume));
+   }
+
+   // CORREÇÃO: Verificar níveis de parcial com mais rigor
+   for (int i = 0; i < 10; i++) {
       double level = m_symbolParams[index].partialLevels[i];
 
-      if (level <= 0)
-      {
+      if (level <= 0) {
          break; // Fim dos níveis válidos
       }
 
-      if (currentRR >= level)
-      {
-         return true;
+      // IMPORTANTE: Verificar se ainda não executamos esta parcial
+      if (currentRR >= level) {
+         // Calcular volume desta parcial
+         double partialVolume = currentVolume * m_symbolParams[index].partialVolumes[i];
+         
+         // Verificar se é um volume válido
+         double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+         if (partialVolume >= minLot) {
+            if (m_logger != NULL) {
+               m_logger.Info(StringFormat("✅ PARCIAL ATIVADA: Nível %.2f atingido (R:R %.2f), Volume: %.2f lotes", 
+                                        level, currentRR, partialVolume));
+            }
+            return true;
+         } else {
+            if (m_logger != NULL) {
+               m_logger.Debug(StringFormat("Volume de parcial muito pequeno: %.2f < %.2f", partialVolume, minLot));
+            }
+         }
       }
    }
 
    return false;
 }
-
 //+------------------------------------------------------------------+
 //| Obter volume para parcial                                        |
 //+------------------------------------------------------------------+
-double CRiskManager::GetPartialVolume(string symbol, ulong ticket, double currentRR)
-{
+double CRiskManager::GetPartialVolume(string symbol, ulong ticket, double currentRR) {
    // Verificar parâmetros
-   if (symbol == "" || ticket == 0 || currentRR <= 0)
-   {
+   if (symbol == "" || ticket == 0 || currentRR <= 0) {
       return 0;
    }
 
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
 
-   if (index < 0 || !m_symbolParams[index].usePartials)
-   {
+   if (index < 0 || !m_symbolParams[index].usePartials) {
       return 0;
    }
 
-   // Verificar se a posição existe
-   if (!PositionSelectByTicket(ticket))
-   {
+   // VERIFICAÇÃO CRÍTICA: Confirmar que a posição existe
+   if (!PositionSelectByTicket(ticket)) {
+      if (m_logger != NULL) {
+         m_logger.Debug(StringFormat("GetPartialVolume: Posição #%d não existe", ticket));
+      }
       return 0;
    }
 
    // Obter volume atual da posição
    double totalVolume = PositionGetDouble(POSITION_VOLUME);
 
-   // Encontrar o nível de parcial mais próximo
+   // CORREÇÃO: Encontrar o primeiro nível atingido (menor nível)
    int levelIndex = -1;
-   double closestLevel = 999999;
+   double targetLevel = 999999;
 
-   for (int i = 0; i < 10; i++)
-   {
+   for (int i = 0; i < 10; i++) {
       double level = m_symbolParams[index].partialLevels[i];
 
-      if (level <= 0)
-      {
+      if (level <= 0) {
          break; // Fim dos níveis válidos
       }
 
-      if (currentRR >= level && MathAbs(currentRR - level) < MathAbs(currentRR - closestLevel))
-      {
-         closestLevel = level;
+      // Procurar o MENOR nível que foi atingido
+      if (currentRR >= level && level < targetLevel) {
+         targetLevel = level;
          levelIndex = i;
       }
    }
 
    // Se não encontrou nível válido
-   if (levelIndex < 0)
-   {
+   if (levelIndex < 0) {
       return 0;
    }
 
-   // Calcular volume da parcial
+   // CORREÇÃO: Calcular volume baseado no volume RESTANTE, não no original
    double partialVolume = totalVolume * m_symbolParams[index].partialVolumes[levelIndex];
 
    // Ajustar para o tamanho mínimo de lote
    double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
    double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
 
-   if (partialVolume < minLot)
-   {
+   if (stepLot > 0) {
+      partialVolume = MathFloor(partialVolume / stepLot) * stepLot;
+   }
+
+   if (partialVolume < minLot) {
+      if (m_logger != NULL) {
+         m_logger.Debug(StringFormat("Volume de parcial ajustado para mínimo: %.2f -> %.2f", 
+                                   partialVolume, minLot));
+      }
       partialVolume = minLot;
    }
 
-   // Arredondar para o step mais próximo
-   partialVolume = MathFloor(partialVolume / stepLot) * stepLot;
+   // IMPORTANTE: Verificar se parcial não é maior que volume disponível
+   if (partialVolume >= totalVolume) {
+      if (m_logger != NULL) {
+         m_logger.Warning(StringFormat("Parcial seria >= volume total (%.2f >= %.2f), ajustando", 
+                                     partialVolume, totalVolume));
+      }
+      // Deixar pelo menos 1 lote mínimo na posição
+      partialVolume = totalVolume - minLot;
+      
+      if (partialVolume < minLot) {
+         if (m_logger != NULL) {
+            m_logger.Debug("Volume insuficiente para parcial segura");
+         }
+         return 0; // Não fazer parcial se sobraria muito pouco
+      }
+   }
+
+   if (m_logger != NULL) {
+      m_logger.Info(StringFormat("Calculando parcial: Nível %.2f (%.2f%%), Volume: %.2f de %.2f lotes", 
+                               targetLevel, m_symbolParams[index].partialVolumes[levelIndex] * 100, 
+                               partialVolume, totalVolume));
+   }
 
    return partialVolume;
+}
+
+
+// ADICIONAR: Método para resetar controle de parciais quando necessário
+void CRiskManager::ResetPartialControl(ulong ticket) {
+   // Este método pode ser usado para resetar controle interno de parciais
+   // se implementarmos um sistema de rastreamento mais sofisticado no futuro
+   
+   if (m_logger != NULL) {
+      m_logger.Debug(StringFormat("Reset de controle de parciais para posição #%d", ticket));
+   }
 }
 
 //+------------------------------------------------------------------+

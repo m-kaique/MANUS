@@ -616,8 +616,15 @@ void ManageExistingPositions()
    ulong eaMagicNumber = g_tradeExecutor.GetMagicNumber();
    int positionsManaged = 0;
 
-   // Gerenciar todas as posições abertas
-   for (int i = PositionsTotal() - 1; i >= 0; i--)
+   // CORREÇÃO: Obter lista de tickets primeiro para evitar problemas durante a iteração
+   ulong tickets[];
+   int totalPositions = PositionsTotal();
+   int validPositions = 0;
+
+   // Coletar tickets das posições válidas
+   ArrayResize(tickets, totalPositions);
+   
+   for (int i = 0; i < totalPositions; i++)
    {
       ulong ticket = PositionGetTicket(i);
       if (ticket <= 0) continue;
@@ -625,21 +632,80 @@ void ManageExistingPositions()
       // Verificar se a posição pertence a este EA
       if (PositionGetInteger(POSITION_MAGIC) != eaMagicNumber) continue;
 
+      tickets[validPositions] = ticket;
+      validPositions++;
+   }
+
+   // Redimensionar array para o tamanho correto
+   ArrayResize(tickets, validPositions);
+
+   if (g_logger != NULL && validPositions > 0) {
+      g_logger.Debug(StringFormat("Gerenciando %d posições ativas", validPositions));
+   }
+
+   // Processar cada posição válida
+   for (int i = 0; i < validPositions; i++)
+   {
+      ulong ticket = tickets[i];
+      
+      // VERIFICAÇÃO CRÍTICA: Confirmar que a posição ainda existe
+      if (!PositionSelectByTicket(ticket)) {
+         if (g_logger != NULL) {
+            g_logger.Debug(StringFormat("Posição #%d não existe mais, pulando", ticket));
+         }
+         continue;
+      }
+
+      // Obter informações atuais da posição
       string symbol = PositionGetString(POSITION_SYMBOL);
       double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
       double stopLoss = PositionGetDouble(POSITION_SL);
+      double currentVolume = PositionGetDouble(POSITION_VOLUME);
 
-      // === 1. VERIFICAR E EXECUTAR PARCIAIS ===
-      if (g_riskManager.ShouldTakePartial(symbol, ticket, currentPrice, entryPrice, stopLoss))
-      {
-         ExecutePartialClose(ticket, symbol, currentPrice, entryPrice, stopLoss);
+      // Log de debug detalhado
+      if (g_logger != NULL) {
+         g_logger.Debug(StringFormat("Processando posição #%d: %s %.2f lotes @ %.5f", 
+                                   ticket, symbol, currentVolume, currentPrice));
       }
 
-      // === 2. APLICAR TRAILING STOP ===
-      ApplyTrailingStopBySymbol(ticket, symbol);
+      // === 1. VERIFICAR E EXECUTAR PARCIAIS ===
+      bool shouldTakePartial = g_riskManager.ShouldTakePartial(symbol, ticket, currentPrice, entryPrice, stopLoss);
+      
+      if (shouldTakePartial) {
+         if (g_logger != NULL) {
+            g_logger.Info(StringFormat("⚡ EXECUTANDO PARCIAL para posição #%d", ticket));
+         }
+         
+         bool partialSuccess = ExecutePartialClose(ticket, symbol, currentPrice, entryPrice, stopLoss);
+         
+         if (partialSuccess) {
+            // IMPORTANTE: Revalidar posição após parcial
+            if (!PositionSelectByTicket(ticket)) {
+               if (g_logger != NULL) {
+                  g_logger.Info(StringFormat("Posição #%d fechada completamente após parcial", ticket));
+               }
+               continue; // Pular trailing stop se posição não existe mais
+            }
+            
+            // Atualizar volume atual após parcial
+            currentVolume = PositionGetDouble(POSITION_VOLUME);
+            
+            if (g_logger != NULL) {
+               g_logger.Info(StringFormat("Posição #%d após parcial: %.2f lotes restantes", ticket, currentVolume));
+            }
+         }
+      }
 
-      positionsManaged++;
+      // === 2. APLICAR TRAILING STOP (apenas se posição ainda existe) ===
+      if (PositionSelectByTicket(ticket)) {
+         ApplyTrailingStopBySymbol(ticket, symbol);
+         positionsManaged++;
+      } else {
+         if (g_logger != NULL) {
+            g_logger.Debug(StringFormat("Posição #%d não existe mais para trailing stop", ticket));
+         }
+      }
    }
 
    // Log apenas quando necessário
@@ -647,18 +713,24 @@ void ManageExistingPositions()
    {
       g_positionsManaged += positionsManaged;
       
-      if (g_logger != NULL)
-      {
-         g_logger.Debug(StringFormat("Gerenciadas %d posições (SL/TP/Trailing/Parciais)", positionsManaged));
+      if (g_logger != NULL) {
+         g_logger.Debug(StringFormat("✅ Gerenciadas %d posições (SL/TP/Trailing/Parciais)", positionsManaged));
       }
    }
 }
-
 //+------------------------------------------------------------------+
 //| Executar fechamento parcial                                      |
 //+------------------------------------------------------------------+
-void ExecutePartialClose(ulong ticket, string symbol, double currentPrice, double entryPrice, double stopLoss)
+bool ExecutePartialClose(ulong ticket, string symbol, double currentPrice, double entryPrice, double stopLoss)
 {
+   // Verificar se a posição ainda existe
+   if (!PositionSelectByTicket(ticket)) {
+      if (g_logger != NULL) {
+         g_logger.Warning(StringFormat("ExecutePartialClose: Posição #%d não existe mais", ticket));
+      }
+      return false;
+   }
+
    double currentVolume = PositionGetDouble(POSITION_VOLUME);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
@@ -682,30 +754,46 @@ void ExecutePartialClose(ulong ticket, string symbol, double currentPrice, doubl
 
    if (partialVolume > 0 && partialVolume < currentVolume)
    {
-      if (g_logger != NULL)
-      {
-         g_logger.Info(StringFormat("Executando parcial: %s ticket %d - %.2f lotes em R:R %.2f",
-                                    symbol, ticket, partialVolume, currentRR));
+      if (g_logger != NULL) {
+         g_logger.Info(StringFormat("🎯 EXECUTANDO PARCIAL: %s ticket #%d", symbol, ticket));
+         g_logger.Info(StringFormat("   Volume atual: %.2f lotes", currentVolume));
+         g_logger.Info(StringFormat("   Volume parcial: %.2f lotes", partialVolume));
+         g_logger.Info(StringFormat("   R:R atual: %.2f", currentRR));
+         g_logger.Info(StringFormat("   Volume restante: %.2f lotes", currentVolume - partialVolume));
       }
 
       // Executar fechamento parcial
       if (g_tradeExecutor.ClosePosition(ticket, partialVolume))
       {
-         if (g_logger != NULL)
-         {
-            g_logger.Info(StringFormat("Parcial executada com sucesso: %s %.2f lotes", symbol, partialVolume));
+         if (g_logger != NULL) {
+            g_logger.Info(StringFormat("✅ PARCIAL EXECUTADA: %s %.2f lotes", symbol, partialVolume));
          }
+         return true;
       }
       else
       {
-         if (g_logger != NULL)
-         {
-            g_logger.Warning(StringFormat("Falha ao executar parcial: %s", g_tradeExecutor.GetLastErrorDescription()));
+         if (g_logger != NULL) {
+            g_logger.Warning(StringFormat("❌ FALHA na parcial: %s - %s", symbol, g_tradeExecutor.GetLastErrorDescription()));
          }
+         return false;
       }
    }
+   else if (partialVolume >= currentVolume)
+   {
+      if (g_logger != NULL) {
+         g_logger.Info(StringFormat("Parcial seria maior que posição atual (%.2f >= %.2f), pulando", 
+                                  partialVolume, currentVolume));
+      }
+      return false;
+   }
+   else
+   {
+      if (g_logger != NULL) {
+         g_logger.Debug(StringFormat("Sem parcial necessária para %s (volume: %.2f)", symbol, partialVolume));
+      }
+      return false;
+   }
 }
-
 //+------------------------------------------------------------------+
 //| Aplicar trailing stop específico por símbolo                     |
 //+------------------------------------------------------------------+

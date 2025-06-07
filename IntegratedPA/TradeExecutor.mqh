@@ -77,6 +77,7 @@ private:
    // Métodos privados
    bool QuickValidateExecution(OrderRequest &request, MqlTick &tick);
    double GetMaxAllowedSpread(string symbol);
+   void DebugInvalidStopsError(OrderRequest &request, MqlTick &tick);
    bool IsRetryableError(int errorCode);
    double CalculateFixedTrailingStop(ulong ticket, double fixedPoints);
    double CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES timeframe, double atrMultiplier, ulong ticket);
@@ -239,6 +240,7 @@ bool CTradeExecutor::ModifyPosition(ulong ticket, double stopLoss, double takePr
 //+------------------------------------------------------------------+
 //| Fechamento de posição                                            |
 //+------------------------------------------------------------------+
+
 bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
 {
    // Verificar se trading está permitido
@@ -250,14 +252,85 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
       return false;
    }
 
-   // Registrar detalhes do fechamento
+   // Verificar se a posição existe
+   if (!PositionSelectByTicket(ticket))
+   {
+      m_lastError = -2;
+      m_lastErrorDesc = "Posição não encontrada: " + IntegerToString(ticket);
+      if (m_logger != NULL)
+      {
+         m_logger.Error(m_lastErrorDesc);
+      }
+      return false;
+   }
+
+   // Obter informações da posição
+   double currentVolume = PositionGetDouble(POSITION_VOLUME);
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+   // CORREÇÃO: Determinar volume correto para fechamento
+   double volumeToClose = 0.0;
+   bool isPartialClose = false;
+
    if (volume <= 0.0)
    {
-      m_logger.Info(StringFormat("Fechando posição #%d completamente", ticket));
+      // Fechar posição completa
+      volumeToClose = currentVolume;
+      isPartialClose = false;
+
+      if (m_logger != NULL)
+      {
+         m_logger.Info(StringFormat("Fechando posição #%d COMPLETAMENTE: %.2f lotes", ticket, volumeToClose));
+      }
    }
    else
    {
-      m_logger.Info(StringFormat("Fechando posição #%d parcialmente: %.2f lotes", ticket, volume));
+      // Fechar parcialmente
+      if (volume >= currentVolume)
+      {
+         // Se volume solicitado >= volume atual, fechar tudo
+         volumeToClose = currentVolume;
+         isPartialClose = false;
+
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("Volume parcial (%.2f) >= volume atual (%.2f), fechando posição completa",
+                                          volume, currentVolume));
+         }
+      }
+      else
+      {
+         // Fechamento parcial real
+         volumeToClose = volume;
+         isPartialClose = true;
+
+         if (m_logger != NULL)
+         {
+            m_logger.Info(StringFormat("Fechando posição #%d PARCIALMENTE: %.2f de %.2f lotes",
+                                       ticket, volumeToClose, currentVolume));
+         }
+      }
+   }
+
+   // Normalizar volume
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+
+   if (stepLot > 0)
+   {
+      volumeToClose = MathFloor(volumeToClose / stepLot) * stepLot;
+   }
+
+   if (volumeToClose < minLot)
+   {
+      m_lastError = -3;
+      m_lastErrorDesc = StringFormat("Volume muito pequeno para fechamento: %.2f < %.2f", volumeToClose, minLot);
+      if (m_logger != NULL)
+      {
+         m_logger.Error(m_lastErrorDesc);
+      }
+      return false;
    }
 
    // Executar fechamento com retry
@@ -268,11 +341,60 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
    {
       if (retries > 0)
       {
-         m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
+         }
          Sleep(m_retryDelay);
+
+         // Revalidar posição
+         if (!PositionSelectByTicket(ticket))
+         {
+            m_lastError = -4;
+            m_lastErrorDesc = "Posição não existe mais durante retry";
+            if (m_logger != NULL)
+            {
+               m_logger.Error(m_lastErrorDesc);
+            }
+            return false;
+         }
+
+         // Atualizar volume atual
+         currentVolume = PositionGetDouble(POSITION_VOLUME);
+         if (isPartialClose && volumeToClose >= currentVolume)
+         {
+            volumeToClose = currentVolume;
+            isPartialClose = false;
+
+            if (m_logger != NULL)
+            {
+               m_logger.Info("Ajustando para fechamento completo no retry");
+            }
+         }
       }
 
-      result = m_trade.PositionClose(ticket, (ulong)volume);
+      // EXECUÇÃO CORRIGIDA: Usar PositionClosePartial para parciais
+      if (isPartialClose)
+      {
+         // Para fechamento parcial, usar PositionClosePartial
+         result = m_trade.PositionClosePartial(ticket, volumeToClose);
+
+         if (m_logger != NULL)
+         {
+            m_logger.Debug(StringFormat("Tentativa %d: PositionClosePartial(#%d, %.2f)",
+                                        retries + 1, ticket, volumeToClose));
+         }
+      }
+      else
+      {
+         // Para fechamento completo, usar PositionClose
+         result = m_trade.PositionClose(ticket);
+
+         if (m_logger != NULL)
+         {
+            m_logger.Debug(StringFormat("Tentativa %d: PositionClose(#%d)", retries + 1, ticket));
+         }
+      }
 
       // Verificar resultado
       if (!result)
@@ -280,11 +402,19 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
          m_lastError = (int)m_trade.ResultRetcode();
          m_lastErrorDesc = "Erro no fechamento da posição: " + IntegerToString(m_lastError);
 
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("Erro %d na tentativa %d: %s", m_lastError, retries + 1, m_lastErrorDesc));
+         }
+
          // Verificar se o erro é recuperável
          if (!IsRetryableError(m_lastError))
          {
-            m_logger.Error(m_lastErrorDesc);
-            return false;
+            if (m_logger != NULL)
+            {
+               m_logger.Error("Erro não recuperável: " + m_lastErrorDesc);
+            }
+            break;
          }
       }
 
@@ -294,16 +424,40 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
    // Verificar resultado final
    if (result)
    {
-      m_logger.Info(StringFormat("Posição #%d fechada com sucesso", ticket));
+      ulong dealTicket = m_trade.ResultDeal();
+
+      if (m_logger != NULL)
+      {
+         if (isPartialClose)
+         {
+            m_logger.Info(StringFormat("✅ FECHAMENTO PARCIAL executado com sucesso!", ""));
+            m_logger.Info(StringFormat("   Posição: #%d", ticket));
+            m_logger.Info(StringFormat("   Volume fechado: %.2f lotes", volumeToClose));
+            m_logger.Info(StringFormat("   Volume restante: %.2f lotes", currentVolume - volumeToClose));
+            m_logger.Info(StringFormat("   Deal: #%d", dealTicket));
+         }
+         else
+         {
+            m_logger.Info(StringFormat("✅ FECHAMENTO COMPLETO executado com sucesso!", ""));
+            m_logger.Info(StringFormat("   Posição: #%d", ticket));
+            m_logger.Info(StringFormat("   Volume fechado: %.2f lotes", volumeToClose));
+            m_logger.Info(StringFormat("   Deal: #%d", dealTicket));
+         }
+      }
       return true;
    }
    else
    {
-      m_logger.Error(StringFormat("Falha no fechamento da posição #%d após %d tentativas. Último erro: %d", ticket, m_maxRetries, m_lastError));
+      if (m_logger != NULL)
+      {
+         m_logger.Error(StringFormat("❌ FALHA no fechamento da posição #%d após %d tentativas", ticket, m_maxRetries));
+         m_logger.Error(StringFormat("   Último erro: %d (%s)", m_lastError, m_lastErrorDesc));
+         m_logger.Error(StringFormat("   Tipo: %s", isPartialClose ? "PARCIAL" : "COMPLETO"));
+         m_logger.Error(StringFormat("   Volume solicitado: %.2f", volumeToClose));
+      }
       return false;
    }
 }
-
 //+------------------------------------------------------------------+
 //| Fechamento de todas as posições                                  |
 //+------------------------------------------------------------------+
@@ -1370,6 +1524,12 @@ bool CTradeExecutor::ExecuteInBatches(OrderRequest &request, double maxBatchSize
          {
             m_lastError = (int)m_trade.ResultRetcode();
             m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
+            // DEBUG ESPECÍFICO para erro 10016
+            if (m_lastError == 10016 && retries == 0)
+            {
+               MqlTick currentTick;
+               DebugInvalidStopsError(request, currentTick);
+            }
             if (!IsRetryableError(m_lastError))
             {
                if (m_logger != NULL)
@@ -1680,99 +1840,277 @@ bool CTradeExecutor::Execute(OrderRequest &request)
    }
 }
 
- bool CTradeExecutor::QuickValidateExecution(OrderRequest &request, MqlTick &tick) {
-   if(m_logger != NULL) {
+bool CTradeExecutor::QuickValidateExecution(OrderRequest &request, MqlTick &tick)
+{
+   if (m_logger != NULL)
+   {
       m_logger.Debug("TradeExecutor: Executando validação rápida...");
    }
-   
+
    // 1. Verificar se o mercado está aberto
    long tradeMode = SymbolInfoInteger(request.symbol, SYMBOL_TRADE_MODE);
-   if(tradeMode != SYMBOL_TRADE_MODE_FULL) {
-      if(m_logger != NULL) {
+   if (tradeMode != SYMBOL_TRADE_MODE_FULL)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Error("Mercado fechado ou trading restrito para " + request.symbol);
       }
       return false;
    }
-   
+
    // 2. Verificar se temos preços válidos
-   if(tick.ask <= 0 || tick.bid <= 0 || tick.ask <= tick.bid) {
-      if(m_logger != NULL) {
+   if (tick.ask <= 0 || tick.bid <= 0 || tick.ask <= tick.bid)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Error(StringFormat("Preços inválidos: Bid=%.5f, Ask=%.5f", tick.bid, tick.ask));
       }
       return false;
    }
-   
+
    // 3. Verificar spread razoável
    double spread = tick.ask - tick.bid;
    double maxSpread = GetMaxAllowedSpread(request.symbol);
-   
-   if(spread > maxSpread) {
-      if(m_logger != NULL) {
+
+   if (spread > maxSpread)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Warning(StringFormat("Spread muito alto: %.5f > %.5f", spread, maxSpread));
       }
       // Não bloquear, apenas avisar
    }
-   
+
    // 4. Verificar volumes
    double minVol = SymbolInfoDouble(request.symbol, SYMBOL_VOLUME_MIN);
    double maxVol = SymbolInfoDouble(request.symbol, SYMBOL_VOLUME_MAX);
-   
-   if(request.volume < minVol || request.volume > maxVol) {
-      if(m_logger != NULL) {
-         m_logger.Error(StringFormat("Volume fora dos limites: %.2f (permitido: %.2f - %.2f)", 
-                                   request.volume, minVol, maxVol));
+
+   if (request.volume < minVol || request.volume > maxVol)
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Error(StringFormat("Volume fora dos limites: %.2f (permitido: %.2f - %.2f)",
+                                     request.volume, minVol, maxVol));
       }
       return false;
    }
-   
+
    // 5. Verificar margem livre (estimativa rápida)
    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
    double requiredMargin = request.volume * tick.ask * 0.01; // Estimativa grosseira
-   
-   if(freeMargin < requiredMargin) {
-      if(m_logger != NULL) {
+
+   if (freeMargin < requiredMargin)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Error(StringFormat("Margem insuficiente: %.2f < %.2f (estimado)", freeMargin, requiredMargin));
       }
       return false;
    }
-   
+
    // 6. Verificar stops básicos
    double marketPrice = (request.type == ORDER_TYPE_BUY) ? tick.ask : tick.bid;
-   
-   if(request.type == ORDER_TYPE_BUY) {
-      if(request.stopLoss >= marketPrice) {
-         if(m_logger != NULL) {
+
+   if (request.type == ORDER_TYPE_BUY)
+   {
+      if (request.stopLoss >= marketPrice)
+      {
+         if (m_logger != NULL)
+         {
             m_logger.Error(StringFormat("SL inválido para COMPRA: %.5f >= %.5f", request.stopLoss, marketPrice));
          }
          return false;
       }
-   } else {
-      if(request.stopLoss <= marketPrice) {
-         if(m_logger != NULL) {
+   }
+   else
+   {
+      if (request.stopLoss <= marketPrice)
+      {
+         if (m_logger != NULL)
+         {
             m_logger.Error(StringFormat("SL inválido para VENDA: %.5f <= %.5f", request.stopLoss, marketPrice));
          }
          return false;
       }
    }
-   
-   if(m_logger != NULL) {
+
+   if (m_logger != NULL)
+   {
       m_logger.Debug("✅ Validação rápida: APROVADA");
    }
-   
+
    return true;
 }
 
 // E uma função auxiliar para spread máximo:
-double CTradeExecutor::GetMaxAllowedSpread(string symbol) {
+double CTradeExecutor::GetMaxAllowedSpread(string symbol)
+{
    // Spreads máximos específicos por ativo
-   if(StringFind(symbol, "WIN") >= 0) return 20.0;  // WIN$D: máximo 20 pontos
-   if(StringFind(symbol, "WDO") >= 0) return 5.0;   // WDO$D: máximo 5 pontos  
-   if(StringFind(symbol, "BIT") >= 0) return 100.0; // BIT$D: máximo 100 pontos
-   
+   if (StringFind(symbol, "WIN") >= 0)
+      return 20.0; // WIN$D: máximo 20 pontos
+   if (StringFind(symbol, "WDO") >= 0)
+      return 5.0; // WDO$D: máximo 5 pontos
+   if (StringFind(symbol, "BIT") >= 0)
+      return 100.0; // BIT$D: máximo 100 pontos
+
    // Para outros símbolos: 5x o spread normal
    long currentSpreadPoints = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    double currentSpread = currentSpreadPoints * point;
-   
+
    return MathMax(currentSpread * 5.0, point * 10.0); // Mínimo de 10 pontos
+}
+
+void CTradeExecutor::DebugInvalidStopsError(OrderRequest &request, MqlTick &tick)
+{
+   if (m_logger == NULL)
+      return;
+
+   m_logger.Error("🔍 === DEBUG DETALHADO - ERRO 10016 (INVALID STOPS) ===");
+
+   // Informações básicas
+   m_logger.Error(StringFormat("Símbolo: %s", request.symbol));
+   m_logger.Error(StringFormat("Tipo de ordem: %s", EnumToString(request.type)));
+   m_logger.Error(StringFormat("Volume: %.2f", request.volume));
+
+   // Preços solicitados
+   m_logger.Error(StringFormat("Preço entrada: %.5f", request.price));
+   m_logger.Error(StringFormat("Stop Loss: %.5f", request.stopLoss));
+   m_logger.Error(StringFormat("Take Profit: %.5f", request.takeProfit));
+
+   // Preços de mercado
+   m_logger.Error(StringFormat("BID atual: %.5f", tick.bid));
+   m_logger.Error(StringFormat("ASK atual: %.5f", tick.ask));
+   m_logger.Error(StringFormat("Spread: %.5f", tick.ask - tick.bid));
+
+   // Informações do símbolo
+   double point = SymbolInfoDouble(request.symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(request.symbol, SYMBOL_DIGITS);
+   long stopsLevel = SymbolInfoInteger(request.symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   long freezeLevel = SymbolInfoInteger(request.symbol, SYMBOL_TRADE_FREEZE_LEVEL);
+
+   m_logger.Error(StringFormat("Point: %.10f", point));
+   m_logger.Error(StringFormat("Digits: %d", digits));
+   m_logger.Error(StringFormat("Stops Level: %d pontos", stopsLevel));
+   m_logger.Error(StringFormat("Freeze Level: %d pontos", freezeLevel));
+
+   // Análise detalhada para SELL
+   if (request.type == ORDER_TYPE_SELL)
+   {
+      m_logger.Error("--- ANÁLISE PARA ORDEM DE VENDA ---");
+
+      // Verificar relação SL vs Entrada
+      if (request.stopLoss <= request.price)
+      {
+         m_logger.Error(StringFormat("❌ ERRO: SL (%.5f) <= Entrada (%.5f) para VENDA",
+                                     request.stopLoss, request.price));
+         m_logger.Error("   Para VENDA: SL deve estar ACIMA da entrada");
+      }
+      else
+      {
+         m_logger.Error(StringFormat("✅ SL correto: %.5f > %.5f (%.1f pontos acima)",
+                                     request.stopLoss, request.price,
+                                     (request.stopLoss - request.price) / point));
+      }
+
+      // Verificar relação TP vs Entrada
+      if (request.takeProfit >= request.price)
+      {
+         m_logger.Error(StringFormat("❌ ERRO: TP (%.5f) >= Entrada (%.5f) para VENDA",
+                                     request.takeProfit, request.price));
+         m_logger.Error("   Para VENDA: TP deve estar ABAIXO da entrada");
+      }
+      else
+      {
+         m_logger.Error(StringFormat("✅ TP correto: %.5f < %.5f (%.1f pontos abaixo)",
+                                     request.takeProfit, request.price,
+                                     (request.price - request.takeProfit) / point));
+      }
+
+      // Verificar distância do SL em relação ao BID
+      double slDistanceFromBid = request.stopLoss - tick.bid;
+      m_logger.Error(StringFormat("Distância SL do BID: %.1f pontos", slDistanceFromBid / point));
+
+      if (stopsLevel > 0 && slDistanceFromBid < stopsLevel * point)
+      {
+         m_logger.Error(StringFormat("❌ ERRO: SL muito próximo do BID (%.1f < %d pontos)",
+                                     slDistanceFromBid / point, stopsLevel));
+      }
+
+      // Verificar distância do TP em relação ao BID
+      double tpDistanceFromBid = tick.bid - request.takeProfit;
+      m_logger.Error(StringFormat("Distância TP do BID: %.1f pontos", tpDistanceFromBid / point));
+
+      if (stopsLevel > 0 && tpDistanceFromBid < stopsLevel * point)
+      {
+         m_logger.Error(StringFormat("❌ ERRO: TP muito próximo do BID (%.1f < %d pontos)",
+                                     tpDistanceFromBid / point, stopsLevel));
+      }
+   }
+   // Análise para BUY (similar)
+   else if (request.type == ORDER_TYPE_BUY)
+   {
+      m_logger.Error("--- ANÁLISE PARA ORDEM DE COMPRA ---");
+
+      if (request.stopLoss >= request.price)
+      {
+         m_logger.Error(StringFormat("❌ ERRO: SL (%.5f) >= Entrada (%.5f) para COMPRA",
+                                     request.stopLoss, request.price));
+      }
+      else
+      {
+         m_logger.Error(StringFormat("✅ SL correto: %.5f < %.5f", request.stopLoss, request.price));
+      }
+
+      if (request.takeProfit <= request.price)
+      {
+         m_logger.Error(StringFormat("❌ ERRO: TP (%.5f) <= Entrada (%.5f) para COMPRA",
+                                     request.takeProfit, request.price));
+      }
+      else
+      {
+         m_logger.Error(StringFormat("✅ TP correto: %.5f > %.5f", request.takeProfit, request.price));
+      }
+   }
+
+   // Verificar normalização
+   double normalizedPrice = NormalizeDouble(request.price, digits);
+   double normalizedSL = NormalizeDouble(request.stopLoss, digits);
+   double normalizedTP = NormalizeDouble(request.takeProfit, digits);
+
+   m_logger.Error("--- VERIFICAÇÃO DE NORMALIZAÇÃO ---");
+   m_logger.Error(StringFormat("Entrada: %.5f -> %.5f", request.price, normalizedPrice));
+   m_logger.Error(StringFormat("SL: %.5f -> %.5f", request.stopLoss, normalizedSL));
+   m_logger.Error(StringFormat("TP: %.5f -> %.5f", request.takeProfit, normalizedTP));
+
+   // Verificar modo de trading
+   long tradeMode = SymbolInfoInteger(request.symbol, SYMBOL_TRADE_MODE);
+   m_logger.Error(StringFormat("Modo de trading: %d (%s)", tradeMode,
+                               tradeMode == SYMBOL_TRADE_MODE_FULL ? "FULL" : tradeMode == SYMBOL_TRADE_MODE_LONGONLY ? "LONG_ONLY"
+                                                                          : tradeMode == SYMBOL_TRADE_MODE_SHORTONLY  ? "SHORT_ONLY"
+                                                                                                                      : "DISABLED"));
+
+   // Verificar horário de trading
+   datetime currentTime = TimeCurrent();
+   MqlDateTime timeStruct;
+   TimeToStruct(currentTime, timeStruct);
+
+   m_logger.Error(StringFormat("Horário atual: %02d:%02d:%02d",
+                               timeStruct.hour, timeStruct.min, timeStruct.sec));
+
+   // Sugestões de correção
+   m_logger.Error("--- POSSÍVEIS SOLUÇÕES ---");
+
+   if (request.type == ORDER_TYPE_SELL)
+   {
+      double suggestedSL = tick.bid + (stopsLevel > 0 ? (stopsLevel + 10) * point : 50 * point);
+      double suggestedTP = tick.bid - (stopsLevel > 0 ? (stopsLevel + 10) * point : 100 * point);
+
+      m_logger.Error(StringFormat("SL sugerido: %.5f (BID + %d pontos)", suggestedSL,
+                                  stopsLevel > 0 ? stopsLevel + 10 : 50));
+      m_logger.Error(StringFormat("TP sugerido: %.5f (BID - %d pontos)", suggestedTP,
+                                  stopsLevel > 0 ? stopsLevel + 10 : 100));
+   }
+
+   m_logger.Error("=== FIM DO DEBUG ERRO 10016 ===");
 }
