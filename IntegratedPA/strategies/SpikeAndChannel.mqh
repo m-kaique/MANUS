@@ -669,8 +669,6 @@ bool CSpikeAndChannel::FindEntrySetup(string symbol, ENUM_TIMEFRAMES timeframe, 
 //| Detecta entrada em pullback mínimo                               |
 //+------------------------------------------------------------------+
 bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, int &entryBar, double &entryPrice, double &stopLoss) {
-   // Esta entrada é mais comum durante a fase de spike
-   
    // Procurar por uma pequena hesitação (1-2 barras menores)
    for(int i = pattern.spikeEndBar - 1; i >= MathMax(pattern.channelEndBar, 0); i--) {
       bool isHesitation = false;
@@ -695,16 +693,25 @@ bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timef
             if(pattern.isUptrend) {
                if(iClose(symbol, timeframe, i-1) > iOpen(symbol, timeframe, i-1) && 
                   iClose(symbol, timeframe, i-1) > iClose(symbol, timeframe, i)) {
-                  // Entrada na próxima barra após confirmação
+                  
+                  // CORREÇÃO: Usar preço de mercado atual ao invés de tick
                   entryBar = i-1;
-                  MqlTick tick;
-                  SymbolInfoTick(symbol, tick);
-                  entryPrice = pattern.isUptrend ? tick.ask : tick.bid;
-                  stopLoss = iLow(symbol, timeframe, i) - (iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i)) * 0.1;
+                  
+                  // Usar preço da barra de confirmação + pequena margem
+                  double confirmationHigh = iHigh(symbol, timeframe, i-1);
+                  double barRange = iHigh(symbol, timeframe, i-1) - iLow(symbol, timeframe, i-1);
+                  
+                  entryPrice = confirmationHigh + barRange * 0.1; // 10% acima da máxima
+                  stopLoss = iLow(symbol, timeframe, i) - barRange * 0.2; // 20% abaixo da mínima da hesitação
+                  
+                  // Normalizar preços
+                  int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+                  entryPrice = NormalizeDouble(entryPrice, digits);
+                  stopLoss = NormalizeDouble(stopLoss, digits);
                   
                   if(m_logger != NULL) {
-                     m_logger.Info(StringFormat("SpikeAndChannel: Entrada Pullback Mínimo detectada para %s em barra %d", 
-                                             symbol, entryBar));
+                     m_logger.Info(StringFormat("SpikeAndChannel: Entrada Pullback Mínimo detectada para %s em barra %d - Entrada: %.5f, Stop: %.5f", 
+                                             symbol, entryBar, entryPrice, stopLoss));
                   }
                   
                   return true;
@@ -712,16 +719,25 @@ bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timef
             } else {
                if(iClose(symbol, timeframe, i-1) < iOpen(symbol, timeframe, i-1) && 
                   iClose(symbol, timeframe, i-1) < iClose(symbol, timeframe, i)) {
-                  // Entrada na próxima barra após confirmação
+                  
+                  // CORREÇÃO: Usar preço de mercado atual ao invés de tick
                   entryBar = i-1;
-                  MqlTick tick;
-                  SymbolInfoTick(symbol, tick);
-                  entryPrice = pattern.isUptrend ? tick.ask : tick.bid;
-                  stopLoss = iHigh(symbol, timeframe, i) + (iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i)) * 0.1;
+                  
+                  // Usar preço da barra de confirmação - pequena margem
+                  double confirmationLow = iLow(symbol, timeframe, i-1);
+                  double barRange = iHigh(symbol, timeframe, i-1) - iLow(symbol, timeframe, i-1);
+                  
+                  entryPrice = confirmationLow - barRange * 0.1; // 10% abaixo da mínima
+                  stopLoss = iHigh(symbol, timeframe, i) + barRange * 0.2; // 20% acima da máxima da hesitação
+                  
+                  // Normalizar preços
+                  int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+                  entryPrice = NormalizeDouble(entryPrice, digits);
+                  stopLoss = NormalizeDouble(stopLoss, digits);
                   
                   if(m_logger != NULL) {
-                     m_logger.Info(StringFormat("SpikeAndChannel: Entrada Pullback Mínimo detectada para %s em barra %d", 
-                                             symbol, entryBar));
+                     m_logger.Info(StringFormat("SpikeAndChannel: Entrada Pullback Mínimo detectada para %s em barra %d - Entrada: %.5f, Stop: %.5f", 
+                                             symbol, entryBar, entryPrice, stopLoss));
                   }
                   
                   return true;
@@ -733,7 +749,6 @@ bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timef
    
    return false;
 }
-
 //+------------------------------------------------------------------+
 //| Detecta entrada em fechamento forte                              |
 //+------------------------------------------------------------------+
@@ -999,43 +1014,78 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
       return signal;
    }
    
+   // CORREÇÃO: Verificar se o preço de entrada é realista
+   MqlTick currentTick;
+   if(!SymbolInfoTick(symbol, currentTick)) {
+      if(m_logger != NULL) {
+         m_logger.Error("SpikeAndChannel: Falha ao obter tick atual para " + symbol);
+      }
+      return signal;
+   }
+   
+   // Se o preço de entrada estiver muito distante do preço atual, ajustar
+   double currentPrice = pattern.isUptrend ? currentTick.ask : currentTick.bid;
+   double priceDeviation = MathAbs(entryPrice - currentPrice) / currentPrice;
+   
+   if(priceDeviation > 0.02) { // Mais de 2% de diferença
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("SpikeAndChannel: Preço de entrada muito distante (%.5f vs %.5f), ajustando", 
+                                     entryPrice, currentPrice));
+      }
+      
+      // Ajustar preço de entrada para próximo do mercado
+      if(pattern.isUptrend) {
+         entryPrice = currentTick.ask + (currentTick.ask - currentTick.bid) * 2; // Ask + 2x spread
+      } else {
+         entryPrice = currentTick.bid - (currentTick.ask - currentTick.bid) * 2; // Bid - 2x spread
+      }
+      
+      // Reajustar stop loss mantendo a proporção
+      double originalRisk = MathAbs(entryPrice - stopLoss);
+      if(pattern.isUptrend) {
+         stopLoss = entryPrice - originalRisk;
+      } else {
+         stopLoss = entryPrice + originalRisk;
+      }
+      
+      // Normalizar preços ajustados
+      int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+      entryPrice = NormalizeDouble(entryPrice, digits);
+      stopLoss = NormalizeDouble(stopLoss, digits);
+   }
+   
    // Preencher dados do sinal
-   signal.id = (int)GetTickCount(); // ID único baseado no tempo atual
+   signal.id = (int)GetTickCount();
    signal.symbol = symbol;
    signal.direction = pattern.isUptrend ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    signal.marketPhase = PHASE_TREND;
-   signal.quality = SETUP_B; // Qualidade padrão, será reclassificada depois
+   signal.quality = SETUP_B;
    signal.entryPrice = entryPrice;
    signal.stopLoss = stopLoss;
    signal.generatedTime = TimeCurrent();
    signal.strategy = "Spike and Channel";
    signal.isActive = true;
    
-   // Calcular take profits - REMOVIDO: Delegado para RiskManager
-   // Os take profits serão calculados pelo RiskManager baseado nas constantes específicas do ativo
-   // Inicializar array vazio
+   // Inicializar take profits (serão calculados pelo RiskManager)
    for(int i = 0; i < 3; i++) {
       signal.takeProfits[i] = 0.0;
    }
    
-   // Calcular relação risco/retorno
+   // Calcular relação risco/retorno (temporária, será recalculada depois)
    signal.CalculateRiskRewardRatio();
    
-   // Descrição detalhada do sinal
-   signal.description = StringFormat("Spike and Channel (%s) - %s, R:R %.2f, Entrada: %s", 
+   signal.description = StringFormat("Spike and Channel (%s) - %s, Entrada: %.5f, Stop: %.5f", 
                                    pattern.isUptrend ? "Alta" : "Baixa", 
                                    EnumToString(preferredEntryType),
-                                   signal.riskRewardRatio,
-                                   TimeToString(signal.generatedTime));
+                                   signal.entryPrice, signal.stopLoss);
    
    if(m_logger != NULL) {
-      m_logger.Info(StringFormat("SpikeAndChannel: Sinal gerado para %s - %s, Entrada: %.5f, Stop: %.5f, R:R: %.2f", 
+      m_logger.Info(StringFormat("SpikeAndChannel: Sinal gerado para %s - %s, Entrada: %.5f, Stop: %.5f", 
                                symbol, pattern.isUptrend ? "Compra" : "Venda", 
-                               signal.entryPrice, signal.stopLoss, signal.riskRewardRatio));
+                               signal.entryPrice, signal.stopLoss));
    }
    
    return signal;
 }
-
 #endif // SPIKEANDCHANNEL_MQH
 

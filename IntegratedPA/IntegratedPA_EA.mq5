@@ -479,27 +479,29 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| NOVA ESTRUTURA OnTick - REFATORADA CONFORME ANÁLISE             |
 //+------------------------------------------------------------------+
+// Modificação no método OnTick para log melhorado:
 void OnTick()
 {
    g_ticksProcessed++;
    
-   if (g_logger != NULL)
-   {
-      g_logger.Debug(StringFormat("OnTick: Processando tick #%d", g_ticksProcessed));
+   // Log apenas a cada 100 ticks para reduzir spam
+   if (g_logger != NULL && g_ticksProcessed % 100 == 0) {
+      g_logger.Debug(StringFormat("OnTick: Processando tick #%d (cada 100 ticks)", g_ticksProcessed));
    }
 
    // === 1. OPERAÇÕES CRÍTICAS - EXECUTAM A CADA TICK ===
    ProcessCriticalTasks();
 
    // === 2. TAREFAS PERIÓDICAS - A CADA 5 SEGUNDOS ===
-   if (ShouldProcessPeriodic())
-   {
+   if (ShouldProcessPeriodic()) {
       ProcessPeriodicTasks();
    }
 
    // === 3. ANÁLISE DE NOVA BARRA - APENAS EM NOVA BARRA ===
-   if (HasNewBarInAnyAsset())
-   {
+   if (HasNewBarInAnyAsset()) {
+      if (g_logger != NULL) {
+         g_logger.Info("🔄 NOVA BARRA DETECTADA - Iniciando análise de sinais...");
+      }
       ProcessNewSignals();
    }
 }
@@ -968,17 +970,13 @@ Signal GenerateSignalForPhase(string symbol, MARKET_PHASE phase)
 bool ProcessSignal(string symbol, Signal &signal, MARKET_PHASE phase)
 {
    // Verificar se o sinal é válido
-   if (signal.id <= 0 || signal.quality == SETUP_INVALID)
-   {
+   if (signal.id <= 0 || signal.quality == SETUP_INVALID) {
       return false;
    }
 
-
-   // CORREÇÃO: Usar MinSetupQuality em vez de hardcode
-   if (signal.quality > MinSetupQuality)  // Se qualidade for pior que o mínimo
-   {
-      if (g_logger != NULL)
-      {
+   // Verificar qualidade mínima do setup
+   if (signal.quality > MinSetupQuality) {
+      if (g_logger != NULL) {
          g_logger.Debug(StringFormat("%s: Setup %s descartado (mínimo: %s)", 
                                     symbol, 
                                     EnumToString(signal.quality),
@@ -989,14 +987,127 @@ bool ProcessSignal(string symbol, Signal &signal, MARKET_PHASE phase)
 
    g_signalsGenerated++;
 
-   // Log do sinal
-   LogSignalGenerated(symbol, signal);
+   // Log do sinal ANTES da execução
+   if (g_logger != NULL) {
+      string direction = (signal.direction == ORDER_TYPE_BUY) ? "COMPRA" : "VENDA";
+      g_logger.Info(StringFormat("🎯 SINAL DETECTADO: %s %s %s Q:%s - Preparando execução a mercado", 
+                                symbol, direction, signal.strategy, EnumToString(signal.quality)));
+   }
 
-   // Criar e executar ordem
-   OrderRequest request = CreateOrderRequest(symbol, signal, phase);
-   return ExecuteOrder(request);
+   // NOVA LÓGICA: Criar requisição para execução imediata a mercado
+   OrderRequest request = CreateMarketOrderRequest(symbol, signal, phase);
+   
+   if (request.volume <= 0) {
+      if (g_logger != NULL) {
+         g_logger.Warning("Requisição de ordem inválida ou cancelada pelo RiskManager");
+      }
+      return false;
+   }
+
+   // VALIDAÇÃO ADICIONAL: Usar função de debug se disponível
+   if (g_logger != NULL) {
+      ValidateAndDebugTradingParameters(request.symbol, request.type, 
+                                      request.price, request.stopLoss, 
+                                      request.takeProfit, request.volume, g_logger);
+   }
+
+   // Executar ordem a mercado
+   return ExecuteMarketOrder(request);
 }
 
+// Nova função para criar requisições de mercado:
+OrderRequest CreateMarketOrderRequest(string symbol, Signal &signal, MARKET_PHASE phase)
+{
+   OrderRequest request;
+   request.id = 0; // Requisição inválida por padrão
+
+   if (g_riskManager == NULL) {
+      if (g_logger != NULL) {
+         g_logger.Error("RiskManager não disponível para criar requisição de mercado");
+      }
+      return request;
+   }
+
+   // Obter tick atual para referência
+   MqlTick currentTick;
+   if (!SymbolInfoTick(symbol, currentTick)) {
+      if (g_logger != NULL) {
+         g_logger.Error("Falha ao obter tick atual para " + symbol);
+      }
+      return request;
+   }
+
+   if (g_logger != NULL) {
+      string direction = (signal.direction == ORDER_TYPE_BUY) ? "COMPRA" : "VENDA";
+      double marketPrice = (signal.direction == ORDER_TYPE_BUY) ? currentTick.ask : currentTick.bid;
+      
+      g_logger.Info(StringFormat("📊 CRIANDO REQUISIÇÃO A MERCADO:",""));
+      g_logger.Info(StringFormat("   Símbolo: %s", symbol));
+      g_logger.Info(StringFormat("   Direção: %s", direction));
+      g_logger.Info(StringFormat("   Preço mercado: %.5f (%s)", marketPrice, 
+                                signal.direction == ORDER_TYPE_BUY ? "ASK" : "BID"));
+      g_logger.Info(StringFormat("   Spread atual: %.5f", currentTick.ask - currentTick.bid));
+   }
+
+   // RiskManager criará a requisição baseada no mercado atual
+   request = g_riskManager.BuildRequest(symbol, signal, phase);
+   
+   if (request.volume > 0 && g_logger != NULL) {
+      g_logger.Info(StringFormat("✅ Requisição criada: %.2f lotes, SL: %.5f, TP: %.5f", 
+                                request.volume, request.stopLoss, request.takeProfit));
+   }
+
+   return request;
+}
+
+// Nova função para executar ordens a mercado:
+bool ExecuteMarketOrder(OrderRequest &request)
+{
+   if (request.volume <= 0 || request.symbol == "") {
+      if (g_logger != NULL) {
+         g_logger.Warning("Requisição de ordem inválida para execução a mercado");
+      }
+      return false;
+   }
+
+   if (g_tradeExecutor == NULL) {
+      if (g_logger != NULL) {
+         g_logger.Error("TradeExecutor não disponível");
+      }
+      return false;
+   }
+
+   if (g_logger != NULL) {
+      g_logger.Info(StringFormat("🚀 EXECUTANDO ORDEM A MERCADO:",""));
+      g_logger.Info(StringFormat("   %s %s %.2f lotes", 
+                                request.symbol,
+                                request.type == ORDER_TYPE_BUY ? "COMPRA" : "VENDA",
+                                request.volume));
+   }
+
+   // Executar com o TradeExecutor modificado (sempre a mercado)
+   bool success = g_tradeExecutor.Execute(request);
+   
+   if (success) {
+      g_ordersExecuted++;
+      if (g_logger != NULL) {
+         g_logger.Info(StringFormat("✅ ORDEM EXECUTADA COM SUCESSO! Total de ordens: %d", g_ordersExecuted));
+      }
+   } else {
+      if (g_logger != NULL) {
+         g_logger.Error(StringFormat("❌ FALHA NA EXECUÇÃO: %s", g_tradeExecutor.GetLastErrorDescription()));
+         
+         // Log adicional para debug
+         g_logger.Error("Detalhes da falha:");
+         g_logger.Error(StringFormat("   Erro código: %d", g_tradeExecutor.GetLastError()));
+         g_logger.Error(StringFormat("   Símbolo: %s", request.symbol));
+         g_logger.Error(StringFormat("   Volume: %.2f", request.volume));
+         g_logger.Error(StringFormat("   Trading habilitado: %s", EnableTrading ? "SIM" : "NÃO"));
+      }
+   }
+
+   return success;
+}
 //+------------------------------------------------------------------+
 //| Log de sinal gerado                                              |
 //+------------------------------------------------------------------+
@@ -1084,6 +1195,7 @@ void GeneratePerformanceReports()
 {
    if (g_logger == NULL) return;
 
+
    // Estatísticas da conta
    double currentBalance = AccountInfoDouble(ACCOUNT_BALANCE);
    double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -1095,10 +1207,19 @@ void GeneratePerformanceReports()
 
    // Log do relatório
    g_logger.Info("=== RELATÓRIO DE PERFORMANCE (1h) ===");
-   g_logger.Info(StringFormat("Ticks: %d (%.1f/min) | Sinais: %d | Ordens: %d | Posições gerenciadas: %d",
-                              g_ticksProcessed, ticksPerMinute, g_signalsGenerated, g_ordersExecuted, g_positionsManaged));
-   g_logger.Info(StringFormat("Conta: Saldo=%.2f | Equity=%.2f | Margem Livre=%.2f | Posições Abertas=%d",
-                              currentBalance, currentEquity, freeMargin, openPositions));
+   g_logger.Info(StringFormat("📈 ESTATÍSTICAS DE TRADING:",""));
+   g_logger.Info(StringFormat("   Ticks processados: %d (%.1f/min)", g_ticksProcessed, ticksPerMinute));
+   g_logger.Info(StringFormat("   Sinais gerados: %d", g_signalsGenerated));
+   g_logger.Info(StringFormat("   Ordens executadas: %d", g_ordersExecuted));
+   g_logger.Info(StringFormat("   Posições gerenciadas: %d", g_positionsManaged));
+   g_logger.Info(StringFormat("   Taxa de conversão: %.1f%% (ordens/sinais)", 
+                            g_signalsGenerated > 0 ? (double)g_ordersExecuted / g_signalsGenerated * 100 : 0));
+
+   g_logger.Info(StringFormat("💰 INFORMAÇÕES DA CONTA:",""));
+   g_logger.Info(StringFormat("   Saldo: %.2f", currentBalance));
+   g_logger.Info(StringFormat("   Equity: %.2f", currentEquity));
+   g_logger.Info(StringFormat("   Margem Livre: %.2f", freeMargin));
+   g_logger.Info(StringFormat("   Posições Abertas: %d", openPositions));
 
    // Estatísticas de handles
    if (g_indicatorManager != NULL)

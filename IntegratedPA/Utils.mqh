@@ -9,7 +9,7 @@
 
 #include "Structures.mqh"
 #include "Constants.mqh"
-
+#include "Logger.mqh"
 //+------------------------------------------------------------------+
 //| Funções para manipulação de timeframes                           |
 //+------------------------------------------------------------------+
@@ -645,4 +645,201 @@ bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int lookbackBa
    }
    
    return false;
+}
+
+/**
+ * Função para debug e validação de parâmetros de trading
+ * @param symbol Símbolo do ativo
+ * @param orderType Tipo da ordem
+ * @param entryPrice Preço de entrada
+ * @param stopLoss Stop loss
+ * @param takeProfit Take profit
+ * @param volume Volume da ordem
+ * @param logger Ponteiro para logger (opcional)
+ * @return true se todos os parâmetros são válidos
+ */
+bool ValidateAndDebugTradingParameters(string symbol, ENUM_ORDER_TYPE orderType, 
+                                     double entryPrice, double stopLoss, double takeProfit, 
+                                     double volume, CLogger* logger = NULL) {
+   bool isValid = true;
+   string errorMsg = "";
+   
+   // Obter informações do símbolo
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   long stopsLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   
+   if(logger != NULL) {
+      logger.Info("=== VALIDAÇÃO DE PARÂMETROS DE TRADING ===");
+      logger.Info(StringFormat("Símbolo: %s", symbol));
+      logger.Info(StringFormat("Tipo: %s", EnumToString(orderType)));
+      logger.Info(StringFormat("Entrada: %.5f", entryPrice));
+      logger.Info(StringFormat("Stop Loss: %.5f", stopLoss));
+      logger.Info(StringFormat("Take Profit: %.5f", takeProfit));
+      logger.Info(StringFormat("Volume: %.2f", volume));
+      logger.Info("--- Informações do Símbolo ---");
+      logger.Info(StringFormat("Point: %.5f", point));
+      logger.Info(StringFormat("Digits: %d", digits));
+      logger.Info(StringFormat("Stops Level: %d", stopsLevel));
+      logger.Info(StringFormat("Min Lot: %.2f", minLot));
+      logger.Info(StringFormat("Max Lot: %.2f", maxLot));
+      logger.Info(StringFormat("Step Lot: %.2f", stepLot));
+   }
+   
+   // Verificar volume
+   if(volume < minLot || volume > maxLot) {
+      errorMsg = StringFormat("Volume inválido: %.2f (permitido: %.2f - %.2f)", volume, minLot, maxLot);
+      isValid = false;
+   }
+   
+   if(stepLot > 0 && MathMod(volume, stepLot) != 0) {
+      errorMsg = StringFormat("Volume não está no step correto: %.2f (step: %.2f)", volume, stepLot);
+      isValid = false;
+   }
+   
+   // Verificar preços
+   if(entryPrice <= 0 || stopLoss <= 0) {
+      errorMsg = "Preços devem ser positivos";
+      isValid = false;
+   }
+   
+   // Verificar lógica dos stops baseado no tipo de ordem
+   if(orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_LIMIT || orderType == ORDER_TYPE_BUY_STOP) {
+      if(stopLoss >= entryPrice) {
+         errorMsg = StringFormat("Stop Loss deve estar abaixo da entrada para compra: SL=%.5f, Entrada=%.5f", 
+                                stopLoss, entryPrice);
+         isValid = false;
+      }
+      
+      if(takeProfit > 0 && takeProfit <= entryPrice) {
+         errorMsg = StringFormat("Take Profit deve estar acima da entrada para compra: TP=%.5f, Entrada=%.5f", 
+                                takeProfit, entryPrice);
+         isValid = false;
+      }
+   }
+   else if(orderType == ORDER_TYPE_SELL || orderType == ORDER_TYPE_SELL_LIMIT || orderType == ORDER_TYPE_SELL_STOP) {
+      if(stopLoss <= entryPrice) {
+         errorMsg = StringFormat("Stop Loss deve estar acima da entrada para venda: SL=%.5f, Entrada=%.5f", 
+                                stopLoss, entryPrice);
+         isValid = false;
+      }
+      
+      if(takeProfit > 0 && takeProfit >= entryPrice) {
+         errorMsg = StringFormat("Take Profit deve estar abaixo da entrada para venda: TP=%.5f, Entrada=%.5f", 
+                                takeProfit, entryPrice);
+         isValid = false;
+      }
+   }
+   
+   // Verificar distâncias mínimas
+   if(stopsLevel > 0) {
+      double minStopDistance = stopsLevel * point;
+      double stopDistance = MathAbs(entryPrice - stopLoss);
+      double tpDistance = (takeProfit > 0) ? MathAbs(entryPrice - takeProfit) : 0;
+      
+      if(stopDistance < minStopDistance) {
+         errorMsg = StringFormat("Stop Loss muito próximo: %.0f pontos (mínimo: %d)", 
+                                stopDistance/point, stopsLevel);
+         isValid = false;
+      }
+      
+      if(tpDistance > 0 && tpDistance < minStopDistance) {
+         errorMsg = StringFormat("Take Profit muito próximo: %.0f pontos (mínimo: %d)", 
+                                tpDistance/point, stopsLevel);
+         isValid = false;
+      }
+      
+      if(logger != NULL) {
+         logger.Info(StringFormat("Distância SL: %.0f pontos", stopDistance/point));
+         if(tpDistance > 0) {
+            logger.Info(StringFormat("Distância TP: %.0f pontos", tpDistance/point));
+         }
+         logger.Info(StringFormat("Mínimo requerido: %d pontos", stopsLevel));
+      }
+   }
+   
+   // Calcular relação risco/retorno
+   if(takeProfit > 0) {
+      double riskDistance = MathAbs(entryPrice - stopLoss);
+      double rewardDistance = MathAbs(takeProfit - entryPrice);
+      double riskRewardRatio = (riskDistance > 0) ? rewardDistance / riskDistance : 0;
+      
+      if(logger != NULL) {
+         logger.Info(StringFormat("Relação Risco/Retorno: %.2f:1", riskRewardRatio));
+      }
+   }
+   
+   // Verificar preço de mercado atual
+   MqlTick currentTick;
+   if(SymbolInfoTick(symbol, currentTick)) {
+      double spread = currentTick.ask - currentTick.bid;
+      double marketPrice = (orderType == ORDER_TYPE_BUY) ? currentTick.ask : currentTick.bid;
+      double priceDeviation = MathAbs(entryPrice - marketPrice) / marketPrice * 100;
+      
+      if(logger != NULL) {
+         logger.Info(StringFormat("Preço atual: Bid=%.5f, Ask=%.5f, Spread=%.5f", 
+                                currentTick.bid, currentTick.ask, spread));
+         logger.Info(StringFormat("Desvio do mercado: %.2f%%", priceDeviation));
+      }
+      
+      if(priceDeviation > 5.0) {
+         errorMsg = StringFormat("Preço muito distante do mercado: %.2f%% de diferença", priceDeviation);
+         // Não invalidar, apenas avisar
+         if(logger != NULL) {
+            logger.Warning(errorMsg);
+         }
+      }
+   }
+   
+   // Log final
+   if(logger != NULL) {
+      if(isValid) {
+         logger.Info("✓ TODOS OS PARÂMETROS SÃO VÁLIDOS");
+      } else {
+         logger.Error("✗ PARÂMETROS INVÁLIDOS: " + errorMsg);
+      }
+      logger.Info("=== FIM DA VALIDAÇÃO ===");
+   }
+   
+   return isValid;
+}
+
+/**
+ * Função auxiliar para imprimir informações detalhadas do símbolo
+ */
+void PrintSymbolInfo(string symbol, CLogger* logger = NULL) {
+   if(logger == NULL) return;
+   
+   logger.Info("=== INFORMAÇÕES DETALHADAS DO SÍMBOLO: " + symbol + " ===");
+   
+   // Informações básicas
+   logger.Info(StringFormat("Nome: %s", SymbolInfoString(symbol, SYMBOL_DESCRIPTION)));
+   logger.Info(StringFormat("Moeda base: %s", SymbolInfoString(symbol, SYMBOL_CURRENCY_BASE)));
+   logger.Info(StringFormat("Moeda lucro: %s", SymbolInfoString(symbol, SYMBOL_CURRENCY_PROFIT)));
+   
+   // Informações de trading
+   logger.Info(StringFormat("Digits: %d", (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS)));
+   logger.Info(StringFormat("Point: %.10f", SymbolInfoDouble(symbol, SYMBOL_POINT)));
+   logger.Info(StringFormat("Tick Size: %.10f", SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE)));
+   logger.Info(StringFormat("Tick Value: %.2f", SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_VALUE)));
+   logger.Info(StringFormat("Contract Size: %.0f", SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE)));
+   
+   // Limites de volume
+   logger.Info(StringFormat("Volume mínimo: %.2f", SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN)));
+   logger.Info(StringFormat("Volume máximo: %.2f", SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX)));
+   logger.Info(StringFormat("Step volume: %.2f", SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP)));
+   
+   // Informações de stops
+   logger.Info(StringFormat("Stops Level: %d", (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL)));
+   logger.Info(StringFormat("Freeze Level: %d", (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_FREEZE_LEVEL)));
+   
+   // Spreads
+   long spreadPoints = SymbolInfoInteger(symbol, SYMBOL_SPREAD);
+   double spreadValue = spreadPoints * SymbolInfoDouble(symbol, SYMBOL_POINT);
+   logger.Info(StringFormat("Spread: %d pontos (%.5f)", spreadPoints, spreadValue));
+   
+   logger.Info("=== FIM DAS INFORMAÇÕES DO SÍMBOLO ===");
 }

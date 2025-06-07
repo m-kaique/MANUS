@@ -390,6 +390,8 @@ bool CRiskManager::ValidateMarketPrice(string symbol, double &price)
 //+------------------------------------------------------------------+
 //| Construir requisição de ordem baseada em sinal                   |
 //+------------------------------------------------------------------+
+// Modificar o método BuildRequest no RiskManager.mqh:
+
 OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase)
 {
    OrderRequest request;
@@ -399,180 +401,209 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    request.type = signal.direction;
 
    // Validar símbolo
-   if (symbol == "" || StringLen(symbol) == 0)
-   {
-      if (m_logger != NULL)
-      {
+   if (symbol == "" || StringLen(symbol) == 0) {
+      if (m_logger != NULL) {
          m_logger.Error("RiskManager: Símbolo inválido para construção de requisição");
-      }
-      request.volume = 0; // Cancelar operação
-      return request;
-   }
-
-   // Validar preço de entrada
-   double marketPrice = 0;
-   if (!ValidateMarketPrice(symbol, marketPrice))
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Error("RiskManager: Falha ao validar preço de mercado para " + symbol);
-      }
-      request.volume = 0; // Cancelar operação
-      return request;
-   }
-
-   // Usar preço de mercado se o preço do sinal for inválido
-   if (signal.entryPrice <= 0)
-   {
-      signal.entryPrice = marketPrice;
-      if (m_logger != NULL)
-      {
-         m_logger.Warning("RiskManager: Preço de entrada inválido, usando preço de mercado: " + DoubleToString(marketPrice, 5));
-      }
-   }
-
-   request.price = signal.entryPrice;
-   request.comment = "IntegratedPA: " + EnumToString(signal.quality) + " " + EnumToString(phase);
-
-   // Calcular stop loss
-   // Usar stop loss do sinal se válido, senão calcular
-   if (signal.stopLoss > 0 &&
-       ((signal.direction == ORDER_TYPE_BUY && signal.stopLoss < signal.entryPrice) ||
-        (signal.direction == ORDER_TYPE_SELL && signal.stopLoss > signal.entryPrice)))
-   {
-      request.stopLoss = signal.stopLoss;
-   }
-   else
-   {
-      request.stopLoss = CalculateStopLoss(symbol, signal.direction, signal.entryPrice, phase, signal);
-   }
-
-   //
-   // Após calcular stop loss
-   double stopDistance = MathAbs(request.price - request.stopLoss);
-   double minStopDistance = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * _Point;
-
-   if (stopDistance < minStopDistance)
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Warning(StringFormat("Stop muito próximo: %.0f pontos. Mínimo: %.0f",
-                                       stopDistance / _Point, minStopDistance / _Point));
-      }
-      // Ajustar para distância mínima
-      if (signal.direction == ORDER_TYPE_BUY)
-      {
-         request.stopLoss = request.price - minStopDistance;
-      }
-      else
-      {
-         request.stopLoss = request.price + minStopDistance;
-      }
-   }
-   //
-
-   // Calcular take profit
-   request.takeProfit = CalculateTakeProfit(symbol, signal.direction, signal.entryPrice, request.stopLoss);
-
-   // Encontrar índice do símbolo
-   int index = FindSymbolIndex(symbol);
-   double riskPercentage = (index >= 0) ? m_symbolParams[index].riskPercentage : m_defaultRiskPercentage;
-
-   // Ajustar risco com base na qualidade do setup
-   switch (signal.quality)
-   {
-   case SETUP_A_PLUS:
-      riskPercentage *= 1.5; // 50% a mais para setups A+
-      break;
-   case SETUP_A:
-      riskPercentage *= 1.2; // 20% a mais para setups A
-      break;
-   case SETUP_B:
-      riskPercentage *= 1.0; // Risco normal para setups B
-      break;
-   case SETUP_C:
-      riskPercentage *= 0.5; // 50% a menos para setups C
-      break;
-   default:
-      riskPercentage *= 0.3; // Risco mínimo para outros casos
-   }
-
-   // Ajustar risco com base na fase de mercado
-   switch (phase)
-   {
-   case PHASE_TREND:
-      riskPercentage *= 1.0; // Risco normal em tendência
-      break;
-   case PHASE_RANGE:
-      riskPercentage *= 0.8; // 20% a menos em range
-      break;
-   case PHASE_REVERSAL:
-      riskPercentage *= 0.7; // 30% a menos em reversão
-      break;
-   default:
-      riskPercentage *= 0.5; // Risco mínimo para outros casos
-   }
-
-   // Verificar risco total atual
-   double availableRisk = GetAvailableRisk();
-
-   // E adicionar verificação antes de calcular volume:
-   if(!CanOpenNewPosition(symbol, 0.01, signal.entryPrice, request.stopLoss, riskPercentage)) {
-      if(m_logger != NULL) {
-         m_logger.Warning("Nova posição rejeitada por exceder limite de risco total");
       }
       request.volume = 0;
       return request;
    }
 
-   if (availableRisk <= 0)
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Warning(StringFormat("RiskManager: Risco máximo de %.2f%% atingido. Operação cancelada.", m_maxTotalRisk));
+   // NOVA LÓGICA: Obter preço atual do mercado para cálculos
+   MqlTick currentTick;
+   if (!SymbolInfoTick(symbol, currentTick)) {
+      if (m_logger != NULL) {
+         m_logger.Error("RiskManager: Falha ao obter tick atual para " + symbol);
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
 
-   // Limitar risco ao disponível
+   // Determinar preço de referência para cálculos (será o preço de execução real)
+   double referencePrice = (signal.direction == ORDER_TYPE_BUY) ? currentTick.ask : currentTick.bid;
+   
+   // IMPORTANTE: O preço na requisição é apenas referência - a execução será sempre a mercado
+   request.price = referencePrice;
+   request.comment = "IntegratedPA: " + EnumToString(signal.quality) + " " + EnumToString(phase) + " (MERCADO)";
+
+   if (m_logger != NULL) {
+      m_logger.Info(StringFormat("RiskManager: Usando preço de referência %.5f (%s = %.5f)", 
+                               referencePrice,
+                               signal.direction == ORDER_TYPE_BUY ? "ASK" : "BID",
+                               signal.direction == ORDER_TYPE_BUY ? currentTick.ask : currentTick.bid));
+   }
+
+   // Calcular stop loss baseado no preço de referência
+   if (signal.stopLoss > 0) {
+      // Verificar se o stop loss do sinal é válido em relação ao preço de mercado
+      bool isValidSL = false;
+      
+      if (signal.direction == ORDER_TYPE_BUY && signal.stopLoss < referencePrice) {
+         isValidSL = true;
+      } else if (signal.direction == ORDER_TYPE_SELL && signal.stopLoss > referencePrice) {
+         isValidSL = true;
+      }
+      
+      if (isValidSL) {
+         request.stopLoss = signal.stopLoss;
+         if (m_logger != NULL) {
+            m_logger.Info("RiskManager: Usando stop loss do sinal: " + DoubleToString(signal.stopLoss, 5));
+         }
+      } else {
+         if (m_logger != NULL) {
+            m_logger.Warning(StringFormat("RiskManager: Stop loss do sinal inválido (%.5f vs mercado %.5f), recalculando...", 
+                                        signal.stopLoss, referencePrice));
+         }
+         request.stopLoss = CalculateStopLoss(symbol, signal.direction, referencePrice, phase, signal);
+      }
+   } else {
+      request.stopLoss = CalculateStopLoss(symbol, signal.direction, referencePrice, phase, signal);
+   }
+
+   // Verificar distância mínima do stop loss
+   double stopDistance = MathAbs(referencePrice - request.stopLoss);
+   long minStopLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double minStopDistance = minStopLevel * point;
+
+   if (minStopLevel > 0 && stopDistance < minStopDistance) {
+      if (m_logger != NULL) {
+         m_logger.Warning(StringFormat("RiskManager: Stop muito próximo: %.0f pontos (mínimo: %d)", 
+                                     stopDistance / point, minStopLevel));
+      }
+      
+      // Ajustar para distância mínima + margem de segurança
+      double safetyMargin = minStopDistance * 0.5; // 50% de margem
+      double adjustedDistance = minStopDistance + safetyMargin;
+      
+      if (signal.direction == ORDER_TYPE_BUY) {
+         request.stopLoss = referencePrice - adjustedDistance;
+      } else {
+         request.stopLoss = referencePrice + adjustedDistance;
+      }
+      
+      if (m_logger != NULL) {
+         m_logger.Info(StringFormat("RiskManager: Stop ajustado para %.5f (distância: %.0f pontos)", 
+                                   request.stopLoss, adjustedDistance / point));
+      }
+   }
+
+   // Calcular take profit baseado no preço de referência e stop loss final
+   request.takeProfit = CalculateTakeProfit(symbol, signal.direction, referencePrice, request.stopLoss);
+
+   // Normalizar preços
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   request.price = NormalizeDouble(request.price, digits);
+   request.stopLoss = NormalizeDouble(request.stopLoss, digits);
+   request.takeProfit = NormalizeDouble(request.takeProfit, digits);
+
+   // Validação final dos preços
+   bool pricesValid = true;
+   
+   if (signal.direction == ORDER_TYPE_BUY) {
+      if (request.stopLoss >= referencePrice) {
+         if (m_logger != NULL) {
+            m_logger.Error(StringFormat("RiskManager: SL inválido para COMPRA: %.5f >= %.5f", request.stopLoss, referencePrice));
+         }
+         pricesValid = false;
+      }
+      if (request.takeProfit > 0 && request.takeProfit <= referencePrice) {
+         if (m_logger != NULL) {
+            m_logger.Error(StringFormat("RiskManager: TP inválido para COMPRA: %.5f <= %.5f", request.takeProfit, referencePrice));
+         }
+         pricesValid = false;
+      }
+   } else {
+      if (request.stopLoss <= referencePrice) {
+         if (m_logger != NULL) {
+            m_logger.Error(StringFormat("RiskManager: SL inválido para VENDA: %.5f <= %.5f", request.stopLoss, referencePrice));
+         }
+         pricesValid = false;
+      }
+      if (request.takeProfit > 0 && request.takeProfit >= referencePrice) {
+         if (m_logger != NULL) {
+            m_logger.Error(StringFormat("RiskManager: TP inválido para VENDA: %.5f >= %.5f", request.takeProfit, referencePrice));
+         }
+         pricesValid = false;
+      }
+   }
+
+   if (!pricesValid) {
+      if (m_logger != NULL) {
+         m_logger.Error("RiskManager: Preços inválidos calculados, cancelando operação");
+      }
+      request.volume = 0;
+      return request;
+   }
+
+   // Encontrar índice do símbolo para ajuste de risco
+   int index = FindSymbolIndex(symbol);
+   double riskPercentage = (index >= 0) ? m_symbolParams[index].riskPercentage : m_defaultRiskPercentage;
+
+   // Ajustar risco com base na qualidade do setup
+   switch (signal.quality) {
+      case SETUP_A_PLUS: riskPercentage *= 1.5; break;
+      case SETUP_A:      riskPercentage *= 1.2; break;
+      case SETUP_B:      riskPercentage *= 1.0; break;
+      case SETUP_C:      riskPercentage *= 0.5; break;
+      default:           riskPercentage *= 0.3; break;
+   }
+
+   // Ajustar risco com base na fase de mercado
+   switch (phase) {
+      case PHASE_TREND:    riskPercentage *= 1.0; break;
+      case PHASE_RANGE:    riskPercentage *= 0.8; break;
+      case PHASE_REVERSAL: riskPercentage *= 0.7; break;
+      default:             riskPercentage *= 0.5; break;
+   }
+
+   // Verificar risco disponível
+   double availableRisk = GetAvailableRisk();
+   if (availableRisk <= 0) {
+      if (m_logger != NULL) {
+         m_logger.Warning(StringFormat("RiskManager: Risco máximo atingido. Operação cancelada.",""));
+      }
+      request.volume = 0;
+      return request;
+   }
+
    riskPercentage = MathMin(riskPercentage, availableRisk);
 
-   // Calcular tamanho da posição
-   request.volume = CalculatePositionSize(symbol, signal.entryPrice, request.stopLoss, riskPercentage);
+   // Calcular tamanho da posição baseado no preço de referência
+   request.volume = CalculatePositionSize(symbol, referencePrice, request.stopLoss, riskPercentage);
 
-   // Verificar se o volume é válido
-   if (request.volume <= 0)
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Error("RiskManager: Volume inválido calculado para " + symbol + ": " + DoubleToString(request.volume, 2));
+   if (request.volume <= 0) {
+      if (m_logger != NULL) {
+         m_logger.Error("RiskManager: Volume inválido calculado: " + DoubleToString(request.volume, 2));
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
 
    // Limitar tamanho máximo
-   if (index >= 0 && request.volume > m_symbolParams[index].maxLotSize)
-   {
+   if (index >= 0 && request.volume > m_symbolParams[index].maxLotSize) {
       request.volume = m_symbolParams[index].maxLotSize;
    }
 
-   if (m_logger != NULL)
-   {
-      m_logger.Info(StringFormat("RiskManager: Requisição criada para %s: %s %.2f @ %.5f, SL: %.5f, TP: %.5f, Risco: %.2f%%",
-                                 symbol,
-                                 request.type == ORDER_TYPE_BUY ? "Compra" : "Venda",
-                                 request.volume,
-                                 request.price,
-                                 request.stopLoss,
-                                 request.takeProfit,
-                                 riskPercentage));
+   // Calcular R:R baseado nos preços finais
+   double riskDistance = MathAbs(referencePrice - request.stopLoss);
+   double rewardDistance = MathAbs(request.takeProfit - referencePrice);
+   double riskRewardRatio = (riskDistance > 0) ? rewardDistance / riskDistance : 0;
+
+   if (m_logger != NULL) {
+      m_logger.Info(StringFormat("RiskManager: ✅ REQUISIÇÃO CRIADA PARA EXECUÇÃO A MERCADO",""));
+      m_logger.Info(StringFormat("   Símbolo: %s", symbol));
+      m_logger.Info(StringFormat("   Tipo: %s", request.type == ORDER_TYPE_BUY ? "COMPRA" : "VENDA"));
+      m_logger.Info(StringFormat("   Volume: %.2f lotes", request.volume));
+      m_logger.Info(StringFormat("   Preço referência: %.5f (%s)", referencePrice, 
+                                request.type == ORDER_TYPE_BUY ? "ASK" : "BID"));
+      m_logger.Info(StringFormat("   Stop Loss: %.5f", request.stopLoss));
+      m_logger.Info(StringFormat("   Take Profit: %.5f", request.takeProfit));
+      m_logger.Info(StringFormat("   Risco: %.2f%% | R:R: %.2f:1", riskPercentage, riskRewardRatio));
    }
 
    return request;
 }
-
 //+------------------------------------------------------------------+
 //| Calcular stop loss baseado na fase de mercado                    |
 //+------------------------------------------------------------------+
@@ -819,88 +850,103 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
 //+------------------------------------------------------------------+
 //| Calcular take profit baseado no stop loss                        |
 //+------------------------------------------------------------------+
+
 double CRiskManager::CalculateTakeProfit(string symbol, ENUM_ORDER_TYPE orderType, double entryPrice, double stopLoss)
 {
    // Verificar parâmetros
-   if (symbol == "" || entryPrice <= 0 || stopLoss <= 0)
-   {
-      if (m_logger != NULL)
-      {
+   if(symbol == "" || entryPrice <= 0 || stopLoss <= 0) {
+      if(m_logger != NULL) {
          m_logger.Error("RiskManager: Parâmetros inválidos para cálculo de take profit");
       }
       return 0;
    }
 
    // Verificar se o stop loss está no lado correto da entrada
-   if (orderType == ORDER_TYPE_BUY && stopLoss >= entryPrice)
-   {
-      if (m_logger != NULL)
-      {
+   if(orderType == ORDER_TYPE_BUY && stopLoss >= entryPrice) {
+      if(m_logger != NULL) {
          m_logger.Error("RiskManager: Stop loss inválido para compra: deve estar abaixo do preço de entrada");
       }
       return 0;
    }
 
-   if (orderType == ORDER_TYPE_SELL && stopLoss <= entryPrice)
-   {
-      if (m_logger != NULL)
-      {
+   if(orderType == ORDER_TYPE_SELL && stopLoss <= entryPrice) {
+      if(m_logger != NULL) {
          m_logger.Error("RiskManager: Stop loss inválido para venda: deve estar acima do preço de entrada");
       }
       return 0;
    }
 
-   // Encontrar índice do símbolo
-   int index = FindSymbolIndex(symbol);
+   // Calcular distância do risco
+   double riskDistance = MathAbs(entryPrice - stopLoss);
+   if(riskDistance <= 0) {
+      if(m_logger != NULL) {
+         m_logger.Error("RiskManager: Distância de risco inválida");
+      }
+      return 0;
+   }
 
+   // Obter informações do símbolo
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   
    // Calcular take profit baseado nas constantes específicas do ativo
    double takeProfitDistance = 0;
+   double defaultRRRatio = 2.0; // Razão padrão de 2:1
 
-   if (StringFind(symbol, "WIN") >= 0)
-   {
-      takeProfitDistance = WIN_FIRST_TARGET * GetSymbolPointValue(symbol);
-   }
-   else if (StringFind(symbol, "WDO") >= 0)
-   {
-      takeProfitDistance = WDO_FIRST_TARGET * GetSymbolPointValue(symbol);
-   }
-   else if (StringFind(symbol, "BIT") >= 0)
-   {
-      takeProfitDistance = BTC_FIRST_TARGET * GetSymbolPointValue(symbol);
-   }
-   else
-   {
-      // Fallback para outros símbolos: usar relação risco/retorno padrão
-      double riskRewardRatio = 2.0; // Padrão: 1:2
-      double stopDistance = MathAbs(entryPrice - stopLoss);
-      takeProfitDistance = stopDistance * riskRewardRatio;
+   if(StringFind(symbol, "WIN") >= 0) {
+      // Para WIN$D: usar constante específica ou 2x o risco
+      takeProfitDistance = MathMax(WIN_FIRST_TARGET * point, riskDistance * defaultRRRatio);
+   } 
+   else if(StringFind(symbol, "WDO") >= 0) {
+      // Para WDO$D: usar constante específica ou 2x o risco  
+      takeProfitDistance = MathMax(WDO_FIRST_TARGET * point, riskDistance * defaultRRRatio);
+   } 
+   else if(StringFind(symbol, "BIT") >= 0) {
+      // Para BIT$D: usar constante específica ou 2x o risco
+      takeProfitDistance = MathMax(BTC_FIRST_TARGET * point, riskDistance * defaultRRRatio);
+   } 
+   else {
+      // Para outros símbolos: usar relação risco/retorno padrão
+      takeProfitDistance = riskDistance * defaultRRRatio;
    }
 
    // Calcular preço do take profit
    double takeProfit = 0;
-   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
 
-   if (orderType == ORDER_TYPE_BUY)
-   {
+   if(orderType == ORDER_TYPE_BUY) {
       takeProfit = entryPrice + takeProfitDistance;
-   }
-   else
-   {
+   } else {
       takeProfit = entryPrice - takeProfitDistance;
    }
 
    // Normalizar o preço do take profit
    takeProfit = NormalizeDouble(takeProfit, digits);
 
-   if (m_logger != NULL)
-   {
-      m_logger.Debug(StringFormat("RiskManager: Take profit calculado para %s: %.5f (baseado em constantes específicas do ativo)",
-                                  symbol, takeProfit));
+   // Verificação de sanidade
+   if(orderType == ORDER_TYPE_BUY && takeProfit <= entryPrice) {
+      if(m_logger != NULL) {
+         m_logger.Warning("Take profit calculado está incorreto para compra, usando fallback");
+      }
+      takeProfit = entryPrice + (riskDistance * 2.0);
+      takeProfit = NormalizeDouble(takeProfit, digits);
+   }
+   
+   if(orderType == ORDER_TYPE_SELL && takeProfit >= entryPrice) {
+      if(m_logger != NULL) {
+         m_logger.Warning("Take profit calculado está incorreto para venda, usando fallback");
+      }
+      takeProfit = entryPrice - (riskDistance * 2.0);
+      takeProfit = NormalizeDouble(takeProfit, digits);
+   }
+
+   if(m_logger != NULL) {
+      double calculatedRR = takeProfitDistance / riskDistance;
+      m_logger.Debug(StringFormat("RiskManager: Take profit calculado para %s: %.5f (R:R: %.2f)", 
+                                symbol, takeProfit, calculatedRR));
    }
 
    return takeProfit;
 }
-
 //+------------------------------------------------------------------+
 //| Calcular tamanho da posição baseado no risco                     |
 //+------------------------------------------------------------------+
@@ -1253,61 +1299,74 @@ double CRiskManager::GetPartialVolume(string symbol, ulong ticket, double curren
    return partialVolume;
 }
 
-
 //+------------------------------------------------------------------+
 //| Calcular risco de uma posição específica                         |
 //+------------------------------------------------------------------+
-double CRiskManager::CalculatePositionRisk(string symbol, double volume, double openPrice, 
-                                          double stopLoss, ENUM_POSITION_TYPE posType)
+double CRiskManager::CalculatePositionRisk(string symbol, double volume, double openPrice,
+                                           double stopLoss, ENUM_POSITION_TYPE posType)
 {
    // Verificar parâmetros
-   if(symbol == "" || volume <= 0 || openPrice <= 0) {
+   if (symbol == "" || volume <= 0 || openPrice <= 0)
+   {
       return 0.0;
    }
-   
+
    // Se não há stop loss definido, usar ATR como estimativa
-   if(stopLoss <= 0) {
+   if (stopLoss <= 0)
+   {
       double atr = CalculateATRValue(symbol, PERIOD_CURRENT, 14);
-      if(atr > 0) {
+      if (atr > 0)
+      {
          // Estimar stop loss baseado em 2x ATR
-         if(posType == POSITION_TYPE_BUY) {
+         if (posType == POSITION_TYPE_BUY)
+         {
             stopLoss = openPrice - (atr * 2.0);
-         } else {
+         }
+         else
+         {
             stopLoss = openPrice + (atr * 2.0);
          }
-      } else {
+      }
+      else
+      {
          // Se não conseguir calcular ATR, usar 2% do preço como estimativa
          double estimatedStop = openPrice * 0.02;
-         if(posType == POSITION_TYPE_BUY) {
+         if (posType == POSITION_TYPE_BUY)
+         {
             stopLoss = openPrice - estimatedStop;
-         } else {
+         }
+         else
+         {
             stopLoss = openPrice + estimatedStop;
          }
       }
    }
-   
+
    // Calcular distância do stop loss
    double stopDistance = MathAbs(openPrice - stopLoss);
-   if(stopDistance <= 0) {
+   if (stopDistance <= 0)
+   {
       return 0.0;
    }
-   
+
    // Obter valor do tick e ponto
    double tickValue = GetSymbolTickValue(symbol);
    double pointValue = GetSymbolPointValue(symbol);
-   
-   if(tickValue <= 0 || pointValue <= 0) {
-      if(m_logger != NULL) {
-         m_logger.Warning(StringFormat("Valores inválidos para %s: tick=%.5f, point=%.5f", 
-                                     symbol, tickValue, pointValue));
+
+   if (tickValue <= 0 || pointValue <= 0)
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Warning(StringFormat("Valores inválidos para %s: tick=%.5f, point=%.5f",
+                                       symbol, tickValue, pointValue));
       }
       return 0.0;
    }
-   
+
    // Calcular risco em valor monetário
    double stopDistanceInPoints = stopDistance / pointValue;
    double riskAmount = volume * stopDistanceInPoints * tickValue;
-   
+
    return riskAmount;
 }
 
@@ -1317,82 +1376,91 @@ double CRiskManager::CalculatePositionRisk(string symbol, double volume, double 
 double CRiskManager::GetCurrentTotalRisk()
 {
    double totalRisk = 0.0;
-   
+
    // Atualizar informações da conta
    UpdateAccountInfo();
-   
-   if(m_accountBalance <= 0) {
-      if(m_logger != NULL) {
+
+   if (m_accountBalance <= 0)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Warning("GetCurrentTotalRisk: Saldo da conta inválido");
       }
       return 0.0;
    }
-   
+
    // Iterar por todas as posições abertas
    int totalPositions = PositionsTotal();
-   
-   for(int i = 0; i < totalPositions; i++) {
+
+   for (int i = 0; i < totalPositions; i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket <= 0) continue;
-      
+      if (ticket <= 0)
+         continue;
+
       // Obter informações da posição
       string symbol = PositionGetString(POSITION_SYMBOL);
       double volume = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double stopLoss = PositionGetDouble(POSITION_SL);
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      
+
       // Calcular risco da posição
       double positionRisk = CalculatePositionRisk(symbol, volume, openPrice, stopLoss, posType);
       totalRisk += positionRisk;
-      
-      if(m_logger != NULL) {
-         m_logger.Debug(StringFormat("Posição %s: Volume=%.2f, Risco=%.2f%%", 
-                                   symbol, volume, positionRisk));
+
+      if (m_logger != NULL)
+      {
+         m_logger.Debug(StringFormat("Posição %s: Volume=%.2f, Risco=%.2f%%",
+                                     symbol, volume, positionRisk));
       }
    }
-   
+
    // Converter para percentual
    double totalRiskPercent = (totalRisk / m_accountBalance) * 100.0;
-   
-   if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("Risco total atual: %.2f%% (%.2f de %.2f)", 
-                                totalRiskPercent, totalRisk, m_accountBalance));
+
+   if (m_logger != NULL)
+   {
+      m_logger.Debug(StringFormat("Risco total atual: %.2f%% (%.2f de %.2f)",
+                                  totalRiskPercent, totalRisk, m_accountBalance));
    }
-   
+
    return totalRiskPercent;
 }
 
 //+------------------------------------------------------------------+
 //| Verificar se nova posição pode ser aberta sem exceder risco      |
 //+------------------------------------------------------------------+
-bool CRiskManager::CanOpenNewPosition(string symbol, double volume, double entryPrice, 
-                                     double stopLoss, double requestedRisk)
+bool CRiskManager::CanOpenNewPosition(string symbol, double volume, double entryPrice,
+                                      double stopLoss, double requestedRisk)
 {
    // Calcular risco atual
    double currentRisk = GetCurrentTotalRisk();
-   
+
    // Calcular risco da nova posição
    ENUM_POSITION_TYPE estimatedType = (entryPrice > stopLoss) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
    double newPositionRisk = CalculatePositionRisk(symbol, volume, entryPrice, stopLoss, estimatedType);
    double newPositionRiskPercent = (newPositionRisk / m_accountBalance) * 100.0;
-   
+
    // Verificar se o risco total ficaria dentro do limite
    double totalRiskAfter = currentRisk + newPositionRiskPercent;
-   
-   if(m_logger != NULL) {
+
+   if (m_logger != NULL)
+   {
       m_logger.Debug(StringFormat("Verificação de risco: Atual=%.2f%%, Nova=%.2f%%, Total=%.2f%%, Limite=%.2f%%",
-                                currentRisk, newPositionRiskPercent, totalRiskAfter, m_maxTotalRisk));
+                                  currentRisk, newPositionRiskPercent, totalRiskAfter, m_maxTotalRisk));
    }
-   
-   if(totalRiskAfter > m_maxTotalRisk) {
-      if(m_logger != NULL) {
+
+   if (totalRiskAfter > m_maxTotalRisk)
+   {
+      if (m_logger != NULL)
+      {
          m_logger.Warning(StringFormat("Nova posição rejeitada: Risco total seria %.2f%% (limite: %.2f%%)",
-                                     totalRiskAfter, m_maxTotalRisk));
+                                       totalRiskAfter, m_maxTotalRisk));
       }
       return false;
    }
-   
+
    return true;
 }
 
@@ -1403,7 +1471,7 @@ double CRiskManager::GetAvailableRisk()
 {
    double currentRisk = GetCurrentTotalRisk();
    double availableRisk = m_maxTotalRisk - currentRisk;
-   
+
    return MathMax(0.0, availableRisk);
 }
 
@@ -1412,30 +1480,33 @@ double CRiskManager::GetAvailableRisk()
 //+------------------------------------------------------------------+
 void CRiskManager::GenerateRiskReport()
 {
-   if(m_logger == NULL) return;
-   
+   if (m_logger == NULL)
+      return;
+
    m_logger.Info("=== RELATÓRIO DE RISCO ===");
-   
+
    // Informações da conta
    UpdateAccountInfo();
    m_logger.Info(StringFormat("Saldo: %.2f | Equity: %.2f | Margem Livre: %.2f",
-                            m_accountBalance, m_accountEquity, m_accountFreeMargin));
-   
+                              m_accountBalance, m_accountEquity, m_accountFreeMargin));
+
    // Risco total
    double totalRisk = GetCurrentTotalRisk();
    double availableRisk = GetAvailableRisk();
-   
+
    m_logger.Info(StringFormat("Risco Total: %.2f%% de %.2f%% (%.2f%% disponível)",
-                            totalRisk, m_maxTotalRisk, availableRisk));
-   
+                              totalRisk, m_maxTotalRisk, availableRisk));
+
    // Posições individuais
    int totalPositions = PositionsTotal();
    m_logger.Info(StringFormat("Posições Abertas: %d", totalPositions));
-   
-   for(int i = 0; i < totalPositions; i++) {
+
+   for (int i = 0; i < totalPositions; i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket <= 0) continue;
-      
+      if (ticket <= 0)
+         continue;
+
       string symbol = PositionGetString(POSITION_SYMBOL);
       double volume = PositionGetDouble(POSITION_VOLUME);
       double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
@@ -1443,42 +1514,47 @@ void CRiskManager::GenerateRiskReport()
       double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
       double profit = PositionGetDouble(POSITION_PROFIT);
       ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      
+
       double positionRisk = CalculatePositionRisk(symbol, volume, openPrice, stopLoss, posType);
       double positionRiskPercent = (positionRisk / m_accountBalance) * 100.0;
-      
+
       // Calcular R:R atual
       double rr = CalculateCurrentRR(openPrice, currentPrice, stopLoss, posType);
-      
+
       m_logger.Info(StringFormat("  %s: %.2f lotes | Risco: %.2f%% | P&L: %.2f | R:R: %.2f",
-                                symbol, volume, positionRiskPercent, profit, rr));
+                                 symbol, volume, positionRiskPercent, profit, rr));
    }
-   
+
    m_logger.Info("=== FIM RELATÓRIO ===");
 }
 
 //+------------------------------------------------------------------+
 //| Calcular relação risco/recompensa atual de uma posição          |
 //+------------------------------------------------------------------+
-double CRiskManager::CalculateCurrentRR(double entryPrice, double currentPrice, 
-                                       double stopLoss, ENUM_POSITION_TYPE posType)
+double CRiskManager::CalculateCurrentRR(double entryPrice, double currentPrice,
+                                        double stopLoss, ENUM_POSITION_TYPE posType)
 {
-   if(stopLoss <= 0 || entryPrice <= 0 || currentPrice <= 0) {
+   if (stopLoss <= 0 || entryPrice <= 0 || currentPrice <= 0)
+   {
       return 0.0;
    }
-   
+
    double riskDistance = MathAbs(entryPrice - stopLoss);
-   if(riskDistance <= 0) {
+   if (riskDistance <= 0)
+   {
       return 0.0;
    }
-   
+
    double profitDistance;
-   if(posType == POSITION_TYPE_BUY) {
+   if (posType == POSITION_TYPE_BUY)
+   {
       profitDistance = currentPrice - entryPrice;
-   } else {
+   }
+   else
+   {
       profitDistance = entryPrice - currentPrice;
    }
-   
+
    return profitDistance / riskDistance;
 }
 //+------------------------------------------------------------------+
