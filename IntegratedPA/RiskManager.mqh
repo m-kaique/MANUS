@@ -88,8 +88,14 @@ public:
    bool ShouldTakePartial(string symbol, ulong ticket, double currentPrice, double entryPrice, double stopLoss);
    double GetPartialVolume(string symbol, ulong ticket, double currentRR);
 
+   double CalculatePositionRisk(string symbol, double volume, double openPrice, double stopLoss, ENUM_POSITION_TYPE posType);
+
    // Métodos de acesso
    double GetCurrentTotalRisk();
+   bool CanOpenNewPosition(string symbol, double volume, double entryPrice, double stopLoss, double requestedRisk);
+   double GetAvailableRisk();
+   void GenerateRiskReport();
+   double CalculateCurrentRR(double entryPrice, double currentPrice, double stopLoss, ENUM_POSITION_TYPE posType);
    void UpdateAccountInfo();
 };
 
@@ -508,8 +514,16 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    }
 
    // Verificar risco total atual
-   double currentTotalRisk = GetCurrentTotalRisk();
-   double availableRisk = m_maxTotalRisk - currentTotalRisk;
+   double availableRisk = GetAvailableRisk();
+
+   // E adicionar verificação antes de calcular volume:
+   if(!CanOpenNewPosition(symbol, 0.01, signal.entryPrice, request.stopLoss, riskPercentage)) {
+      if(m_logger != NULL) {
+         m_logger.Warning("Nova posição rejeitada por exceder limite de risco total");
+      }
+      request.volume = 0;
+      return request;
+   }
 
    if (availableRisk <= 0)
    {
@@ -1239,16 +1253,233 @@ double CRiskManager::GetPartialVolume(string symbol, ulong ticket, double curren
    return partialVolume;
 }
 
+
 //+------------------------------------------------------------------+
-//| Obter risco total atual                                          |
+//| Calcular risco de uma posição específica                         |
+//+------------------------------------------------------------------+
+double CRiskManager::CalculatePositionRisk(string symbol, double volume, double openPrice, 
+                                          double stopLoss, ENUM_POSITION_TYPE posType)
+{
+   // Verificar parâmetros
+   if(symbol == "" || volume <= 0 || openPrice <= 0) {
+      return 0.0;
+   }
+   
+   // Se não há stop loss definido, usar ATR como estimativa
+   if(stopLoss <= 0) {
+      double atr = CalculateATRValue(symbol, PERIOD_CURRENT, 14);
+      if(atr > 0) {
+         // Estimar stop loss baseado em 2x ATR
+         if(posType == POSITION_TYPE_BUY) {
+            stopLoss = openPrice - (atr * 2.0);
+         } else {
+            stopLoss = openPrice + (atr * 2.0);
+         }
+      } else {
+         // Se não conseguir calcular ATR, usar 2% do preço como estimativa
+         double estimatedStop = openPrice * 0.02;
+         if(posType == POSITION_TYPE_BUY) {
+            stopLoss = openPrice - estimatedStop;
+         } else {
+            stopLoss = openPrice + estimatedStop;
+         }
+      }
+   }
+   
+   // Calcular distância do stop loss
+   double stopDistance = MathAbs(openPrice - stopLoss);
+   if(stopDistance <= 0) {
+      return 0.0;
+   }
+   
+   // Obter valor do tick e ponto
+   double tickValue = GetSymbolTickValue(symbol);
+   double pointValue = GetSymbolPointValue(symbol);
+   
+   if(tickValue <= 0 || pointValue <= 0) {
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("Valores inválidos para %s: tick=%.5f, point=%.5f", 
+                                     symbol, tickValue, pointValue));
+      }
+      return 0.0;
+   }
+   
+   // Calcular risco em valor monetário
+   double stopDistanceInPoints = stopDistance / pointValue;
+   double riskAmount = volume * stopDistanceInPoints * tickValue;
+   
+   return riskAmount;
+}
+
+//+------------------------------------------------------------------+
+//| Obter risco total atual de todas as posições abertas            |
 //+------------------------------------------------------------------+
 double CRiskManager::GetCurrentTotalRisk()
 {
-   // Implementação básica - será expandida posteriormente
-   // Esta função deve calcular o risco total de todas as posições abertas
+   double totalRisk = 0.0;
+   
+   // Atualizar informações da conta
+   UpdateAccountInfo();
+   
+   if(m_accountBalance <= 0) {
+      if(m_logger != NULL) {
+         m_logger.Warning("GetCurrentTotalRisk: Saldo da conta inválido");
+      }
+      return 0.0;
+   }
+   
+   // Iterar por todas as posições abertas
+   int totalPositions = PositionsTotal();
+   
+   for(int i = 0; i < totalPositions; i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      // Obter informações da posição
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stopLoss = PositionGetDouble(POSITION_SL);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      
+      // Calcular risco da posição
+      double positionRisk = CalculatePositionRisk(symbol, volume, openPrice, stopLoss, posType);
+      totalRisk += positionRisk;
+      
+      if(m_logger != NULL) {
+         m_logger.Debug(StringFormat("Posição %s: Volume=%.2f, Risco=%.2f%%", 
+                                   symbol, volume, positionRisk));
+      }
+   }
+   
+   // Converter para percentual
+   double totalRiskPercent = (totalRisk / m_accountBalance) * 100.0;
+   
+   if(m_logger != NULL) {
+      m_logger.Debug(StringFormat("Risco total atual: %.2f%% (%.2f de %.2f)", 
+                                totalRiskPercent, totalRisk, m_accountBalance));
+   }
+   
+   return totalRiskPercent;
+}
 
-   // Por enquanto, retorna 0 para não bloquear novas operações
-   return 0.0;
+//+------------------------------------------------------------------+
+//| Verificar se nova posição pode ser aberta sem exceder risco      |
+//+------------------------------------------------------------------+
+bool CRiskManager::CanOpenNewPosition(string symbol, double volume, double entryPrice, 
+                                     double stopLoss, double requestedRisk)
+{
+   // Calcular risco atual
+   double currentRisk = GetCurrentTotalRisk();
+   
+   // Calcular risco da nova posição
+   ENUM_POSITION_TYPE estimatedType = (entryPrice > stopLoss) ? POSITION_TYPE_BUY : POSITION_TYPE_SELL;
+   double newPositionRisk = CalculatePositionRisk(symbol, volume, entryPrice, stopLoss, estimatedType);
+   double newPositionRiskPercent = (newPositionRisk / m_accountBalance) * 100.0;
+   
+   // Verificar se o risco total ficaria dentro do limite
+   double totalRiskAfter = currentRisk + newPositionRiskPercent;
+   
+   if(m_logger != NULL) {
+      m_logger.Debug(StringFormat("Verificação de risco: Atual=%.2f%%, Nova=%.2f%%, Total=%.2f%%, Limite=%.2f%%",
+                                currentRisk, newPositionRiskPercent, totalRiskAfter, m_maxTotalRisk));
+   }
+   
+   if(totalRiskAfter > m_maxTotalRisk) {
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("Nova posição rejeitada: Risco total seria %.2f%% (limite: %.2f%%)",
+                                     totalRiskAfter, m_maxTotalRisk));
+      }
+      return false;
+   }
+   
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Obter percentual de risco disponível para novas posições        |
+//+------------------------------------------------------------------+
+double CRiskManager::GetAvailableRisk()
+{
+   double currentRisk = GetCurrentTotalRisk();
+   double availableRisk = m_maxTotalRisk - currentRisk;
+   
+   return MathMax(0.0, availableRisk);
+}
+
+//+------------------------------------------------------------------+
+//| Gerar relatório detalhado de risco                              |
+//+------------------------------------------------------------------+
+void CRiskManager::GenerateRiskReport()
+{
+   if(m_logger == NULL) return;
+   
+   m_logger.Info("=== RELATÓRIO DE RISCO ===");
+   
+   // Informações da conta
+   UpdateAccountInfo();
+   m_logger.Info(StringFormat("Saldo: %.2f | Equity: %.2f | Margem Livre: %.2f",
+                            m_accountBalance, m_accountEquity, m_accountFreeMargin));
+   
+   // Risco total
+   double totalRisk = GetCurrentTotalRisk();
+   double availableRisk = GetAvailableRisk();
+   
+   m_logger.Info(StringFormat("Risco Total: %.2f%% de %.2f%% (%.2f%% disponível)",
+                            totalRisk, m_maxTotalRisk, availableRisk));
+   
+   // Posições individuais
+   int totalPositions = PositionsTotal();
+   m_logger.Info(StringFormat("Posições Abertas: %d", totalPositions));
+   
+   for(int i = 0; i < totalPositions; i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      double volume = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stopLoss = PositionGetDouble(POSITION_SL);
+      double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+      double profit = PositionGetDouble(POSITION_PROFIT);
+      ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      
+      double positionRisk = CalculatePositionRisk(symbol, volume, openPrice, stopLoss, posType);
+      double positionRiskPercent = (positionRisk / m_accountBalance) * 100.0;
+      
+      // Calcular R:R atual
+      double rr = CalculateCurrentRR(openPrice, currentPrice, stopLoss, posType);
+      
+      m_logger.Info(StringFormat("  %s: %.2f lotes | Risco: %.2f%% | P&L: %.2f | R:R: %.2f",
+                                symbol, volume, positionRiskPercent, profit, rr));
+   }
+   
+   m_logger.Info("=== FIM RELATÓRIO ===");
+}
+
+//+------------------------------------------------------------------+
+//| Calcular relação risco/recompensa atual de uma posição          |
+//+------------------------------------------------------------------+
+double CRiskManager::CalculateCurrentRR(double entryPrice, double currentPrice, 
+                                       double stopLoss, ENUM_POSITION_TYPE posType)
+{
+   if(stopLoss <= 0 || entryPrice <= 0 || currentPrice <= 0) {
+      return 0.0;
+   }
+   
+   double riskDistance = MathAbs(entryPrice - stopLoss);
+   if(riskDistance <= 0) {
+      return 0.0;
+   }
+   
+   double profitDistance;
+   if(posType == POSITION_TYPE_BUY) {
+      profitDistance = currentPrice - entryPrice;
+   } else {
+      profitDistance = entryPrice - currentPrice;
+   }
+   
+   return profitDistance / riskDistance;
 }
 //+------------------------------------------------------------------+
 
