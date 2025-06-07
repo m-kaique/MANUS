@@ -22,8 +22,9 @@
 class CSignalEngine
 {
 private:
-   CLogger *m_logger;               // Ponteiro para o logger
-   CMarketContext *m_marketContext; // Ponteiro para o contexto de mercado
+   CLogger *m_logger;                   // Ponteiro para o logger
+   CMarketContext *m_marketContext;     // Ponteiro para o contexto de mercado
+   CSetupClassifier *m_setupClassifier; // Ponteiro para o contexto de mercado
 
    // Variáveis para armazenar configurações
    int m_lookbackBars;     // Número de barras para análise retroativa
@@ -32,31 +33,19 @@ private:
 
    // Métodos privados auxiliares
    bool IsValidSignal(Signal &signal);
-   bool HasConfirmation(string symbol, ENUM_TIMEFRAMES timeframe, int signalType);
-   double CalculateSignalStrength(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal);
    bool CheckDataValidity(string symbol, ENUM_TIMEFRAMES timeframe);
 
    // Métodos privados para estratégias específicas de tendência
    Signal GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAMES timeframe);
-   Signal GeneratePullbackToEMASignal(string symbol, ENUM_TIMEFRAMES timeframe);
-   Signal GenerateBreakoutPullbackSignal(string symbol, ENUM_TIMEFRAMES timeframe);
-
-   // Métodos privados para estratégias específicas de range
-   Signal GenerateRangeExtremesRejectionSignal(string symbol, ENUM_TIMEFRAMES timeframe);
-   Signal GenerateFailedBreakoutSignal(string symbol, ENUM_TIMEFRAMES timeframe);
-
-   // Métodos privados para estratégias específicas de reversão
-   Signal GenerateReversalPatternSignal(string symbol, ENUM_TIMEFRAMES timeframe);
-   Signal GenerateDivergenceSignal(string symbol, ENUM_TIMEFRAMES timeframe);
 
 public:
    // Construtores e destrutor
    CSignalEngine();
-   CSignalEngine(CLogger *logger, CMarketContext *marketContext);
+   CSignalEngine(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass);
    ~CSignalEngine();
 
    // Método de inicialização
-   bool Initialize(CLogger *logger, CMarketContext *marketContext);
+   bool Initialize(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupclass);
 
    // Método principal para geração de sinais
    Signal Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAMES timeframe);
@@ -65,9 +54,6 @@ public:
    Signal GenerateTrendSignals(string symbol, ENUM_TIMEFRAMES timeframe);
    Signal GenerateRangeSignals(string symbol, ENUM_TIMEFRAMES timeframe);
    Signal GenerateReversalSignals(string symbol, ENUM_TIMEFRAMES timeframe);
-
-   // Método para classificação de qualidade de setup
-   SETUP_QUALITY ClassifySetupQuality(string symbol, Signal &signal);
 
    // Métodos de configuração
    void SetLookbackBars(int bars) { m_lookbackBars = bars; }
@@ -84,6 +70,7 @@ CSignalEngine::CSignalEngine()
 {
    m_logger = NULL;
    m_marketContext = NULL;
+   m_setupClassifier = NULL;
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_hasValidData = false;
@@ -92,10 +79,11 @@ CSignalEngine::CSignalEngine()
 //+------------------------------------------------------------------+
 //| Construtor com parâmetros                                        |
 //+------------------------------------------------------------------+
-CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext)
+CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass)
 {
    m_logger = logger;
    m_marketContext = marketContext;
+   m_setupClassifier = setupClass;
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_hasValidData = false;
@@ -112,7 +100,7 @@ CSignalEngine::~CSignalEngine()
 //+------------------------------------------------------------------+
 //| Inicializa o motor de sinais                                     |
 //+------------------------------------------------------------------+
-bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext)
+bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass)
 {
    if (logger == NULL || marketContext == NULL)
    {
@@ -125,6 +113,7 @@ bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext)
 
    m_logger = logger;
    m_marketContext = marketContext;
+   m_setupClassifier = setupClass;
 
    m_logger.Info("SignalEngine inicializado com sucesso");
    return true;
@@ -255,7 +244,8 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
    // Se um sinal válido foi gerado, classificar sua qualidade
    if (signal.id > 0)
    {
-      signal.quality = ClassifySetupQuality(symbol, signal);
+
+      signal.quality = m_setupClassifier.ClassifySetup(symbol, PERIOD_CURRENT, signal);
       signal.generatedTime = TimeCurrent();
 
       if (m_logger != NULL)
@@ -297,14 +287,6 @@ Signal CSignalEngine::GenerateTrendSignals(string symbol, ENUM_TIMEFRAMES timefr
    if (signal.id > 0)
       return signal;
 
-   signal = GeneratePullbackToEMASignal(symbol, timeframe);
-   if (signal.id > 0)
-      return signal;
-
-   signal = GenerateBreakoutPullbackSignal(symbol, timeframe);
-   if (signal.id > 0)
-      return signal;
-
    // Nenhum sinal válido encontrado
    return signal;
 }
@@ -333,15 +315,6 @@ Signal CSignalEngine::GenerateRangeSignals(string symbol, ENUM_TIMEFRAMES timefr
       }
       return signal;
    }
-
-   // Tentar gerar sinais com diferentes estratégias de range
-   signal = GenerateRangeExtremesRejectionSignal(symbol, timeframe);
-   if (signal.id > 0)
-      return signal;
-
-   signal = GenerateFailedBreakoutSignal(symbol, timeframe);
-   if (signal.id > 0)
-      return signal;
 
    // Nenhum sinal válido encontrado
    return signal;
@@ -372,58 +345,8 @@ Signal CSignalEngine::GenerateReversalSignals(string symbol, ENUM_TIMEFRAMES tim
       return signal;
    }
 
-   // Tentar gerar sinais com diferentes estratégias de reversão
-   signal = GenerateReversalPatternSignal(symbol, timeframe);
-   if (signal.id > 0)
-      return signal;
-
-   signal = GenerateDivergenceSignal(symbol, timeframe);
-   if (signal.id > 0)
-      return signal;
-
    // Nenhum sinal válido encontrado
    return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Classifica a qualidade do setup                                  |
-//+------------------------------------------------------------------+
-SETUP_QUALITY CSignalEngine::ClassifySetupQuality(string symbol, Signal &signal)
-{
-   // // Verificar se os dados são válidos
-   // if (!m_hasValidData)
-   // {
-   //    return SETUP_INVALID;
-   // }
-
-   // Verificar se o sinal é válido
-   if (signal.id <= 0)
-      return SETUP_INVALID;
-
-   // Calcular a força do sinal
-   double signalStrength = CalculateSignalStrength(symbol, PERIOD_CURRENT, signal);
-
-   // Classificar com base na força do sinal e na relação risco/retorno
-   if (signalStrength >= 0.8 && signal.riskRewardRatio >= 3.0)
-   {
-      Print("SETUP_A_PLUS");
-      return SETUP_A_PLUS;
-   }
-   else if (signalStrength >= 0.6 && signal.riskRewardRatio >= 2.0)
-   {
-      Print("SETUP_A");
-      return SETUP_A;
-   }
-   else if (signalStrength >= 0.4 && signal.riskRewardRatio >= 1.5)
-   {
-      Print("SETUP_B");
-      return SETUP_B;
-   }
-   else
-   {
-      Print("SETUP_MALDITO_C");
-      return SETUP_C;
-   }
 }
 
 //+------------------------------------------------------------------+
@@ -488,49 +411,6 @@ bool CSignalEngine::IsValidSignal(Signal &signal)
       return false;
 
    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Verifica se há confirmação para o sinal                          |
-//+------------------------------------------------------------------+
-bool CSignalEngine::HasConfirmation(string symbol, ENUM_TIMEFRAMES timeframe, int signalType)
-{
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return false;
-   }
-
-   // Implementação básica - será expandida posteriormente
-   // Esta função verificará confirmações específicas para cada tipo de sinal
-
-   // Por enquanto, retorna true para não bloquear a geração de sinais
-   return true;
-}
-
-//+------------------------------------------------------------------+
-//| Calcula a força do sinal                                         |
-//+------------------------------------------------------------------+
-double CSignalEngine::CalculateSignalStrength(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal)
-{
-   // Verificar se os dados são válidos
-   // if (!m_hasValidData)
-   // {
-   //    return 0.0;
-   // }
-
-   // Implementação básica - será expandida posteriormente
-
-   // Fatores que contribuem para a força do sinal:
-   // 1. Alinhamento com a tendência de longo prazo
-   // 2. Presença de confirmações em múltiplos timeframes
-   // 3. Relação risco/retorno
-   // 4. Volume no momento da entrada
-
-   // Por enquanto, retorna um valor baseado apenas na relação risco/retorno
-   double strength = MathMin(signal.riskRewardRatio / 5.0, 1.0);
-
-   return strength;
 }
 
 //+------------------------------------------------------------------+
@@ -627,7 +507,7 @@ Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAM
    if (signal.id > 0)
    {
       // Classificar qualidade do setup
-      signal.quality = ClassifySetupQuality(symbol, signal);
+      signal.quality = m_setupClassifier.ClassifySetup(symbol, PERIOD_CURRENT, signal);
 
       if (m_logger != NULL)
       {
@@ -636,130 +516,8 @@ Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAM
                                     signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda",
                                     EnumToString(signal.quality)));
       }
-   }
-
-   return signal;
-   // Por enquanto, retorna um sinal vazio
-   return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Gera sinal baseado em pullback para EMA                          |
-//+------------------------------------------------------------------+
-Signal CSignalEngine::GeneratePullbackToEMASignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
-   Signal signal;
-   signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
       return signal;
    }
 
-   // Implementação básica - será expandida posteriormente
-
-   // Por enquanto, retorna um sinal vazio
    return signal;
 }
-
-//+------------------------------------------------------------------+
-//| Gera sinal baseado em breakout e pullback                        |
-//+------------------------------------------------------------------+
-Signal CSignalEngine::GenerateBreakoutPullbackSignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
-   Signal signal;
-   signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return signal;
-   }
-
-   // Implementação básica - será expandida posteriormente
-
-   // Por enquanto, retorna um sinal vazio
-   return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Gera sinal baseado em rejeição de extremos de range              |
-//+------------------------------------------------------------------+
-Signal CSignalEngine::GenerateRangeExtremesRejectionSignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
-   Signal signal;
-   signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return signal;
-   }
-
-   // Implementação básica - será expandida posteriormente
-
-   // Por enquanto, retorna um sinal vazio
-   return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Gera sinal baseado em falha de breakout                          |
-//+------------------------------------------------------------------+
-Signal CSignalEngine::GenerateFailedBreakoutSignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
-   Signal signal;
-   signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return signal;
-   }
-
-   // Implementação básica - será expandida posteriormente
-
-   // Por enquanto, retorna um sinal vazio
-   return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Gera sinal baseado em padrão de reversão                         |
-//+------------------------------------------------------------------+
-Signal CSignalEngine::GenerateReversalPatternSignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
-   Signal signal;
-   signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return signal;
-   }
-
-   // Implementação básica - será expandida posteriormente
-
-   // Por enquanto, retorna um sinal vazio
-   return signal;
-}
-
-//+------------------------------------------------------------------+
-//| Gera sinal baseado em divergência                                |
-//+------------------------------------------------------------------+
-Signal CSignalEngine::GenerateDivergenceSignal(string symbol, ENUM_TIMEFRAMES timeframe)
-{
-   Signal signal;
-   signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   if (!m_hasValidData)
-   {
-      return signal;
-   }
-
-   // Implementação básica - será expandida posteriormente
-
-   // Por enquanto, retorna um sinal vazio
-   return signal;
-}
-//+------------------------------------------------------------------+

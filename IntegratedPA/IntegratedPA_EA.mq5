@@ -25,6 +25,7 @@
 #include "TradeExecutor.mqh"
 #include "Logger.mqh"
 #include "Utils.mqh"
+#include "SetupClassifier.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -58,6 +59,7 @@ CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
 CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
+CSetupClassifier *g_setupClassifier = NULL;
 
 // Estrutura para armazenar parâmetros dos ativos
 struct AssetConfig
@@ -357,7 +359,23 @@ int OnInit()
       g_logger.Error("Falha ao inicializar MarketContext");
       return (INIT_FAILED);
    }
+   //
+   // SETUP CLASSIFIER
+   g_setupClassifier = new CSetupClassifier();
+   if (g_setupClassifier == NULL)
+   {
+      g_logger.Error("Erro ao criar objeto SetupClassifier");
+      return (INIT_FAILED);
+   }
 
+   if (!g_setupClassifier.Initialize(g_logger, g_marketContext))
+   {
+      g_logger.Error("Falha ao inicializar SetupClassifier");
+      return (INIT_FAILED);
+   }
+   //////////////////////////
+
+   //
    g_signalEngine = new CSignalEngine();
    if (g_signalEngine == NULL)
    {
@@ -365,7 +383,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_signalEngine.Initialize(g_logger, g_marketContext))
+   if (!g_signalEngine.Initialize(g_logger, g_marketContext, g_setupClassifier))
    {
       g_logger.Error("Falha ao inicializar SignalEngine");
       return (INIT_FAILED);
@@ -406,6 +424,7 @@ int OnInit()
 
    // Configurar o executor de trades
    g_tradeExecutor.SetTradeAllowed(EnableTrading);
+   //
 
    // Inicializar array de últimos tempos de barra
    ArrayResize(g_lastBarTimes, ArraySize(g_assets));
@@ -599,30 +618,25 @@ void OnTick()
          continue;
       }
 
-      if (signal.quality != SETUP_C)
+      g_logger.Info("Sinal gerado para " + symbol + ": " +
+                    (signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda") +
+                    ", Qualidade: " + EnumToString(signal.quality));
+
+      // Criar requisição de ordem
+      OrderRequest request;
+      request = g_riskManager.BuildRequest(symbol, signal, phase);
+
+      // Verificar se a requisição é válida
+      if (request.volume <= 0 || request.price <= 0)
       {
-         g_logger.Info("Sinal gerado para " + symbol + ": " +
-                       (signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda") +
-                       ", Qualidade: " + EnumToString(signal.quality));
+         g_logger.Error("Parâmetros de ordem inválidos");
+         continue;
+      }
 
-         // Criar requisição de ordem
-         OrderRequest request;
-         request = g_riskManager.BuildRequest(symbol, signal, phase);
-
-         // Verificar se a requisição é válida
-         if (request.volume <= 0 || request.price <= 0)
-         {
-            g_logger.Error("Parâmetros de ordem inválidos");
-            continue;
-         }
-
-         // Executar ordem
-         if (!g_tradeExecutor.Execute(request))
-         {
-            g_logger.Error("Falha ao executar ordem para " + symbol + ": " + g_tradeExecutor.GetLastErrorDescription());
-         }
-      }else{
-         Print("SETUP C NAO CONTA!!!!");
+      // Executar ordem
+      if (!g_tradeExecutor.Execute(request))
+      {
+         g_logger.Error("Falha ao executar ordem para " + symbol + ": " + g_tradeExecutor.GetLastErrorDescription());
       }
    }
 
