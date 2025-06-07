@@ -1047,27 +1047,22 @@ double CTradeExecutor::CalculateMATrailingStop(string symbol, ENUM_TIMEFRAMES ti
 //+------------------------------------------------------------------+
 bool CTradeExecutor::ExecuteInBatches(OrderRequest &request, double maxBatchSize = 1.0)
 {
-   // Verificar se trading está permitido
    if(!m_tradeAllowed) {
       m_lastError = -1;
       m_lastErrorDesc = "Trading não está habilitado";
-      if(m_logger != NULL) {
+      if(m_logger != NULL)
          m_logger.Warning(m_lastErrorDesc);
-      }
       return false;
    }
-   
-   // Verificar parâmetros
+
    if(request.symbol == "" || request.volume <= 0 || maxBatchSize <= 0) {
       m_lastError = -2;
       m_lastErrorDesc = "Parâmetros de ordem inválidos";
-      if(m_logger != NULL) {
+      if(m_logger != NULL)
          m_logger.Error(m_lastErrorDesc);
-      }
       return false;
    }
-   
-   // Registrar detalhes da ordem
+
    if(m_logger != NULL) {
       m_logger.Info(StringFormat("Executando ordem em lotes: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f, Lote máximo: %.2f",
                                 request.symbol,
@@ -1078,36 +1073,80 @@ bool CTradeExecutor::ExecuteInBatches(OrderRequest &request, double maxBatchSize
                                 request.takeProfit,
                                 maxBatchSize));
    }
-   
+
    double remainingVolume = request.volume;
    bool allSuccess = true;
    int batchCount = 0;
-   
+
    while(remainingVolume > 0) {
       double batchVolume = MathMin(remainingVolume, maxBatchSize);
       batchCount++;
-      
-      // Criar requisição temporária
+
       OrderRequest batchRequest = request;
       batchRequest.volume = batchVolume;
-      
+
+      // Obter o preço atual do símbolo
+      MqlTick tick;
+      if(!SymbolInfoTick(batchRequest.symbol, tick)) {
+         m_lastError = -4;
+         m_lastErrorDesc = "Falha ao obter o tick de preço atual";
+         if(m_logger != NULL)
+            m_logger.Error(m_lastErrorDesc);
+         return false;
+      }
+
+      // Verificar se o SL foi ultrapassado (evitar entrada inválida)
+      if(batchRequest.type == ORDER_TYPE_SELL && tick.bid >= batchRequest.stopLoss) {
+         m_lastError = -5;
+         m_lastErrorDesc = "Preço atual (bid) ultrapassou o stop loss antes da execução do lote SELL";
+         if(m_logger != NULL)
+            m_logger.Error(m_lastErrorDesc);
+         allSuccess = false;
+         break;
+      }
+
+      if(batchRequest.type == ORDER_TYPE_BUY && tick.ask <= batchRequest.stopLoss) {
+         m_lastError = -6;
+         m_lastErrorDesc = "Preço atual (ask) ultrapassou o stop loss antes da execução do lote BUY";
+         if(m_logger != NULL)
+            m_logger.Error(m_lastErrorDesc);
+         allSuccess = false;
+         break;
+      }
+
+      // (Opcional) Verificar se o TP já foi atingido
+      if(batchRequest.type == ORDER_TYPE_SELL && tick.bid <= batchRequest.takeProfit) {
+         m_lastError = -7;
+         m_lastErrorDesc = "Preço atual (bid) já atingiu o take profit antes da execução do lote SELL";
+         if(m_logger != NULL)
+            m_logger.Warning(m_lastErrorDesc);  // Warning, pois pode não ser crítico
+         allSuccess = false;
+         break;
+      }
+
+      if(batchRequest.type == ORDER_TYPE_BUY && tick.ask >= batchRequest.takeProfit) {
+         m_lastError = -8;
+         m_lastErrorDesc = "Preço atual (ask) já atingiu o take profit antes da execução do lote BUY";
+         if(m_logger != NULL)
+            m_logger.Warning(m_lastErrorDesc);
+         allSuccess = false;
+         break;
+      }
+
       if(m_logger != NULL) {
          m_logger.Info(StringFormat("Executando lote %d: %.2f de %.2f", batchCount, batchVolume, request.volume));
       }
-      
-      // Usar o método Execute original para executar o lote
+
       bool result = false;
       int retries = 0;
-      
+
       while(retries < m_maxRetries && !result) {
          if(retries > 0) {
-            if(m_logger != NULL) {
+            if(m_logger != NULL)
                m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-            }
             Sleep(m_retryDelay);
          }
-         
-         // Executar ordem de acordo com o tipo
+
          switch(batchRequest.type) {
             case ORDER_TYPE_BUY:
                result = m_trade.Buy(batchRequest.volume, batchRequest.symbol, batchRequest.price, batchRequest.stopLoss, batchRequest.takeProfit, batchRequest.comment);
@@ -1130,55 +1169,45 @@ bool CTradeExecutor::ExecuteInBatches(OrderRequest &request, double maxBatchSize
             default:
                m_lastError = -3;
                m_lastErrorDesc = "Tipo de ordem não suportado";
-               if(m_logger != NULL) {
+               if(m_logger != NULL)
                   m_logger.Error(m_lastErrorDesc);
-               }
                return false;
          }
-         
-         // Verificar resultado
+
          if(!result) {
             m_lastError = (int)m_trade.ResultRetcode();
             m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
-            
-            // Verificar se o erro é recuperável
             if(!IsRetryableError(m_lastError)) {
-               if(m_logger != NULL) {
+               if(m_logger != NULL)
                   m_logger.Error(m_lastErrorDesc);
-               }
                return false;
             }
          }
-         
+
          retries++;
       }
-      
+
       if(!result) {
-         if(m_logger != NULL) {
+         if(m_logger != NULL)
             m_logger.Error(StringFormat("Falha ao executar lote %d: %.2f", batchCount, batchVolume));
-         }
          allSuccess = false;
          break;
       }
-      
+
       remainingVolume -= batchVolume;
-      
-      // Pequena pausa entre ordens
-      if(remainingVolume > 0) {
+
+      if(remainingVolume > 0)
          Sleep(100);
-      }
    }
-   
+
    if(allSuccess) {
-      if(m_logger != NULL) {
+      if(m_logger != NULL)
          m_logger.Info(StringFormat("Todos os %d lotes executados com sucesso", batchCount));
-      }
    } else {
-      if(m_logger != NULL) {
+      if(m_logger != NULL)
          m_logger.Warning(StringFormat("Execução parcial: %d de %d lotes executados", batchCount - 1, (int)MathCeil(request.volume / maxBatchSize)));
-      }
    }
-   
+
    return allSuccess;
 }
 

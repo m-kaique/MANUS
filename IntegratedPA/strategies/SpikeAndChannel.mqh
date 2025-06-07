@@ -697,7 +697,9 @@ bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timef
                   iClose(symbol, timeframe, i-1) > iClose(symbol, timeframe, i)) {
                   // Entrada na próxima barra após confirmação
                   entryBar = i-1;
-                  entryPrice = iClose(symbol, timeframe, i-1);
+                  MqlTick tick;
+                  SymbolInfoTick(symbol, tick);
+                  entryPrice = pattern.isUptrend ? tick.ask : tick.bid;
                   stopLoss = iLow(symbol, timeframe, i) - (iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i)) * 0.1;
                   
                   if(m_logger != NULL) {
@@ -712,7 +714,9 @@ bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timef
                   iClose(symbol, timeframe, i-1) < iClose(symbol, timeframe, i)) {
                   // Entrada na próxima barra após confirmação
                   entryBar = i-1;
-                  entryPrice = iClose(symbol, timeframe, i-1);
+                  MqlTick tick;
+                  SymbolInfoTick(symbol, tick);
+                  entryPrice = pattern.isUptrend ? tick.ask : tick.bid;
                   stopLoss = iHigh(symbol, timeframe, i) + (iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i)) * 0.1;
                   
                   if(m_logger != NULL) {

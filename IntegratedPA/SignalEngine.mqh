@@ -577,7 +577,7 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
    // Processar sinal válido
    if (signal.id > 0 && IsValidSignal(signal))
    {
-      signal.quality = ClassifySetupQuality(symbol, normalizedTimeframe, signal);
+      //signal.quality = ClassifySetupQuality(symbol, normalizedTimeframe, signal);
       signal.generatedTime = TimeCurrent();
       signal.timeframe = normalizedTimeframe; // Garantir que o timeframe está setado
 

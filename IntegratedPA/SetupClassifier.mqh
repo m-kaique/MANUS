@@ -533,8 +533,9 @@ bool CSetupClassifier::CheckOptimalSession(string symbol) {
 //+------------------------------------------------------------------+
 bool CSetupClassifier::CheckRiskReward(Signal &signal, double minRatio) {
    // Recalcular R:R para garantir precisão
-   signal.CalculateRiskRewardRatio();
-   
+   if(signal.takeProfits[0] <= 0) {
+    return false; // Não pode avaliar R:R sem TP
+}
    return (signal.riskRewardRatio >= minRatio);
 }
 
