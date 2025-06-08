@@ -26,6 +26,7 @@
 #include "Logger.mqh"
 #include "Utils.mqh"
 #include "SetupClassifier.mqh"
+#include "JsonLog.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -60,16 +61,17 @@ CSignalEngine *g_signalEngine = NULL;
 CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
+CJSONLogger *g_jsonLogger = NULL;
 
 // Array de ativos configurados
 AssetConfig g_assets[];
 
 // Array ultimos sinais por simbolo
-LastSignalInfo g_lastSignals [10];
+LastSignalInfo g_lastSignals[10];
 int g_lastSignalCount = 0;
 
 // Array de sinais pendentes
-PendingSignal g_pendingSignals[10]; 
+PendingSignal g_pendingSignals[10];
 int g_pendingSignalCount = 0;
 
 // Variáveis para controle de tempo
@@ -80,18 +82,22 @@ datetime g_lastExportTime = 0;
 #define MIN_REQUIRED_BARS 100
 
 // Função para verificar se é sinal duplicado
-bool IsDuplicateSignal(string symbol, Signal &newSignal) {
+bool IsDuplicateSignal(string symbol, Signal &newSignal)
+{
    datetime currentTime = TimeCurrent();
-   
-   for(int i = 0; i < g_lastSignalCount; i++) {
-      if(g_lastSignals[i].symbol == symbol && 
-         g_lastSignals[i].direction == newSignal.direction &&
-         currentTime - g_lastSignals[i].signalTime < 900 && // 15 minutos
-         MathAbs(g_lastSignals[i].entryPrice - newSignal.entryPrice) < 200) { // 200 pontos
-         
-         if(g_logger != NULL) {
-            g_logger.Info(StringFormat("Sinal duplicado ignorado para %s - Último sinal há %d segundos", 
-                                     symbol, (int)(currentTime - g_lastSignals[i].signalTime)));
+
+   for (int i = 0; i < g_lastSignalCount; i++)
+   {
+      if (g_lastSignals[i].symbol == symbol &&
+          g_lastSignals[i].direction == newSignal.direction &&
+          currentTime - g_lastSignals[i].signalTime < 900 && // 15 minutos
+          MathAbs(g_lastSignals[i].entryPrice - newSignal.entryPrice) < 200)
+      { // 200 pontos
+
+         if (g_logger != NULL)
+         {
+            g_logger.Info(StringFormat("Sinal duplicado ignorado para %s - Último sinal há %d segundos",
+                                       symbol, (int)(currentTime - g_lastSignals[i].signalTime)));
          }
          return true;
       }
@@ -100,21 +106,26 @@ bool IsDuplicateSignal(string symbol, Signal &newSignal) {
 }
 
 // Função para armazenar último sinal
-void StoreLastSignal(string symbol, Signal &signal) {
+void StoreLastSignal(string symbol, Signal &signal)
+{
    // Encontrar slot existente ou criar novo
    int index = -1;
-   for(int i = 0; i < g_lastSignalCount; i++) {
-      if(g_lastSignals[i].symbol == symbol) {
+   for (int i = 0; i < g_lastSignalCount; i++)
+   {
+      if (g_lastSignals[i].symbol == symbol)
+      {
          index = i;
          break;
       }
    }
-   
-   if(index == -1 && g_lastSignalCount < 10) {
+
+   if (index == -1 && g_lastSignalCount < 10)
+   {
       index = g_lastSignalCount++;
    }
-   
-   if(index >= 0) {
+
+   if (index >= 0)
+   {
       g_lastSignals[index].symbol = symbol;
       g_lastSignals[index].signalTime = TimeCurrent();
       g_lastSignals[index].direction = signal.direction;
@@ -124,13 +135,18 @@ void StoreLastSignal(string symbol, Signal &signal) {
 }
 
 // Função para verificar se há posição aberta
-bool HasOpenPosition(string symbol) {
-   for(int i = 0; i < PositionsTotal(); i++) {
+bool HasOpenPosition(string symbol)
+{
+   for (int i = 0; i < PositionsTotal(); i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket > 0) {
-         if(PositionSelectByTicket(ticket)) {
+      if (ticket > 0)
+      {
+         if (PositionSelectByTicket(ticket))
+         {
             string posSymbol = PositionGetString(POSITION_SYMBOL);
-            if(posSymbol == symbol) {
+            if (posSymbol == symbol)
+            {
                return true;
             }
          }
@@ -161,16 +177,22 @@ bool IsHistoryAvailable(string symbol, ENUM_TIMEFRAMES timeframe, int minBars = 
 //+------------------------------------------------------------------+
 //| Função para configuração dos ativos                              |
 //+------------------------------------------------------------------+
-bool SetupAssets() {
+bool SetupAssets()
+{
    int assetsCount = 0;
 
    // Redimensionar o array de ativos
-   if(EnableBTC) assetsCount++;
-   if(EnableWDO) assetsCount++;
-   if(EnableWIN) assetsCount++;
+   if (EnableBTC)
+      assetsCount++;
+   if (EnableWDO)
+      assetsCount++;
+   if (EnableWIN)
+      assetsCount++;
 
-   if(assetsCount == 0) {
-      if(g_logger != NULL) {
+   if (assetsCount == 0)
+   {
+      if (g_logger != NULL)
+      {
          g_logger.Error("Nenhum ativo habilitado para operação");
       }
       return false;
@@ -180,7 +202,8 @@ bool SetupAssets() {
    int index = 0;
 
    // ✅ CONFIGURAR BTC COM NOVOS PARÂMETROS
-   if(EnableBTC) {
+   if (EnableBTC)
+   {
       g_assets[index].symbol = "BIT$D";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 0.01;
@@ -194,16 +217,18 @@ bool SetupAssets() {
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA BTC
-      g_assets[index].partialLevels[0] = 1.5;  // Era 1.0, agora 1.5
-      g_assets[index].partialLevels[1] = 2.5;  // Era 2.0, agora 2.5
-      g_assets[index].partialLevels[2] = 4.0;  // Era 3.0, agora 4.0
+      g_assets[index].partialLevels[0] = 1.5; // Era 1.0, agora 1.5
+      g_assets[index].partialLevels[1] = 2.5; // Era 2.0, agora 2.5
+      g_assets[index].partialLevels[2] = 4.0; // Era 3.0, agora 4.0
 
       g_assets[index].partialVolumes[0] = 0.3;
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.4;
 
-      if(!SymbolSelect("BIT$D", true)) {
-         if(g_logger != NULL) {
+      if (!SymbolSelect("BIT$D", true))
+      {
+         if (g_logger != NULL)
+         {
             g_logger.Warning("Falha ao selecionar símbolo BIT$D");
          }
       }
@@ -211,7 +236,8 @@ bool SetupAssets() {
    }
 
    // ✅ CONFIGURAR WDO COM NOVOS PARÂMETROS
-   if(EnableWDO) {
+   if (EnableWDO)
+   {
       g_assets[index].symbol = "WDO$D";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 1.0;
@@ -225,16 +251,18 @@ bool SetupAssets() {
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WDO
-      g_assets[index].partialLevels[0] = 2.0;  // Era 1.0, agora 2.0
-      g_assets[index].partialLevels[1] = 3.0;  // Era 1.5, agora 3.0
-      g_assets[index].partialLevels[2] = 4.5;  // Era 2.0, agora 4.5
+      g_assets[index].partialLevels[0] = 2.0; // Era 1.0, agora 2.0
+      g_assets[index].partialLevels[1] = 3.0; // Era 1.5, agora 3.0
+      g_assets[index].partialLevels[2] = 4.5; // Era 2.0, agora 4.5
 
       g_assets[index].partialVolumes[0] = 0.4;
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.3;
 
-      if(!SymbolSelect("WDO$D", true)) {
-         if(g_logger != NULL) {
+      if (!SymbolSelect("WDO$D", true))
+      {
+         if (g_logger != NULL)
+         {
             g_logger.Warning("Falha ao selecionar símbolo WDO");
          }
       }
@@ -242,7 +270,8 @@ bool SetupAssets() {
    }
 
    // ✅ CONFIGURAR WIN COM NOVOS PARÂMETROS
-   if(EnableWIN) {
+   if (EnableWIN)
+   {
       g_assets[index].symbol = "WINM25";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 1.0;
@@ -256,33 +285,39 @@ bool SetupAssets() {
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WIN
-      g_assets[index].partialLevels[0] = 1.8;  // Era 1.0, agora 1.8
-      g_assets[index].partialLevels[1] = 2.8;  // Era 1.5, agora 2.8
-      g_assets[index].partialLevels[2] = 4.2;  // Era 2.0, agora 4.2
+      g_assets[index].partialLevels[0] = 1.8; // Era 1.0, agora 1.8
+      g_assets[index].partialLevels[1] = 2.8; // Era 1.5, agora 2.8
+      g_assets[index].partialLevels[2] = 4.2; // Era 2.0, agora 4.2
 
       g_assets[index].partialVolumes[0] = 0.5;
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.2;
 
-      if(!SymbolSelect("WINM25", true)) {
-         if(g_logger != NULL) {
+      if (!SymbolSelect("WINM25", true))
+      {
+         if (g_logger != NULL)
+         {
             g_logger.Warning("Falha ao selecionar símbolo WIN$");
          }
       }
    }
 
    // Verificar disponibilidade de histórico para cada ativo
-   for(int i = 0; i < assetsCount; i++) {
+   for (int i = 0; i < assetsCount; i++)
+   {
       g_assets[i].historyAvailable = IsHistoryAvailable(g_assets[i].symbol, MainTimeframe, g_assets[i].minRequiredBars);
 
-      if(!g_assets[i].historyAvailable) {
-         if(g_logger != NULL) {
+      if (!g_assets[i].historyAvailable)
+      {
+         if (g_logger != NULL)
+         {
             g_logger.Warning("Histórico não disponível para " + g_assets[i].symbol + ", inicialização adiada");
          }
       }
    }
 
-   if(g_logger != NULL) {
+   if (g_logger != NULL)
+   {
       g_logger.Info(StringFormat("Configurados %d ativos para operação com parâmetros CONSERVADORES", assetsCount));
    }
 
@@ -291,41 +326,50 @@ bool SetupAssets() {
 //+------------------------------------------------------------------+
 //| Função para configurar parâmetros de risco para os ativos        |
 //+------------------------------------------------------------------+
-bool ConfigureRiskParameters() {
-   if(g_riskManager == NULL) {
-      if(g_logger != NULL) {
+bool ConfigureRiskParameters()
+{
+   if (g_riskManager == NULL)
+   {
+      if (g_logger != NULL)
+      {
          g_logger.Error("RiskManager não inicializado");
       }
       return false;
    }
 
-   for(int i = 0; i < ArraySize(g_assets); i++) {
+   for (int i = 0; i < ArraySize(g_assets); i++)
+   {
       // Configurar parâmetros de risco específicos para cada ativo
       g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
 
       // ✅ CONFIGURAR STOPS ESPECÍFICOS POR SÍMBOLO (NOVOS VALORES)
-      if(g_assets[i].symbol == "BIT$D") {
+      if (g_assets[i].symbol == "BIT$D")
+      {
          // BTC: Stop mais conservador
          g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, BTC_MIN_STOP_DISTANCE, 2.8);
       }
-      else if(g_assets[i].symbol == "WDO$D") {
-         // WDO: Stop mais conservador  
+      else if (g_assets[i].symbol == "WDO$D")
+      {
+         // WDO: Stop mais conservador
          g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, 3.5);
       }
-      else if(g_assets[i].symbol == "WINM25") {
+      else if (g_assets[i].symbol == "WINM25")
+      {
          // WIN: Stop mais conservador
          g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, 2.5);
       }
 
       // Configurar parciais para cada ativo
-      if(g_assets[i].usePartials) {
+      if (g_assets[i].usePartials)
+      {
          g_riskManager.ConfigureSymbolPartials(g_assets[i].symbol, true,
-                                             g_assets[i].partialLevels,
-                                             g_assets[i].partialVolumes);
+                                               g_assets[i].partialLevels,
+                                               g_assets[i].partialVolumes);
       }
    }
 
-   if(g_logger != NULL) {
+   if (g_logger != NULL)
+   {
       g_logger.Info("Parâmetros de risco configurados com STOPS CONSERVADORES");
    }
 
@@ -345,6 +389,21 @@ int OnInit()
    }
 
    g_logger.Info("Iniciando Expert Advisor...");
+
+   // Inicializar o logger JSON após o logger principal
+   g_jsonLogger = new CJSONLogger(g_logger);
+   if (g_jsonLogger == NULL)
+   {
+      g_logger.Error("Erro ao criar objeto JSONLogger");
+      return (INIT_FAILED);
+   }
+
+   // Iniciar nova sessão de trading
+   if (!g_jsonLogger.StartSession("xxxx"))
+   {
+      g_logger.Error("Falha ao iniciar sessão JSON");
+      // Não é crítico, continuar sem JSON logging
+   }
 
    // Verificar compatibilidade
    if (MQLInfoInteger(MQL_TESTER) == false)
@@ -540,15 +599,31 @@ void OnDeinit(const int reason)
       delete g_logger;
       g_logger = NULL;
    }
+
+   // Finalizar sessão JSON
+   if (g_jsonLogger != NULL)
+   {
+      g_jsonLogger.EndSession();
+      delete g_jsonLogger;
+      g_jsonLogger = NULL;
+   }
 }
 
+int tickCounter = 0;
 //+------------------------------------------------------------------+
 //| Função OnTick() CORRIGIDA                                        |
 //+------------------------------------------------------------------+
-void OnTick() {
+void OnTick()
+{   tickCounter++;
+   
+   if(tickCounter >= 10) { // Atualizar a cada 10 ticks
+      UpdateJSONOrders();
+      tickCounter = 0;
+   }
    // Verificar se os componentes estão inicializados
-   if(g_logger == NULL || g_marketContext == NULL || g_signalEngine == NULL ||
-      g_riskManager == NULL || g_tradeExecutor == NULL) {
+   if (g_logger == NULL || g_marketContext == NULL || g_signalEngine == NULL ||
+       g_riskManager == NULL || g_tradeExecutor == NULL)
+   {
       Print("Componentes não inicializados");
       return;
    }
@@ -561,30 +636,36 @@ void OnTick() {
    ProcessPendingSignals();
 
    // 3. GERAÇÃO DE NOVOS SINAIS (APENAS EM NOVA BARRA)
-   for(int i = 0; i < ArraySize(g_assets); i++) {
+   for (int i = 0; i < ArraySize(g_assets); i++)
+   {
       string symbol = g_assets[i].symbol;
 
       // Verificar se o ativo está habilitado
-      if(!g_assets[i].enabled) {
+      if (!g_assets[i].enabled)
+      {
          continue;
       }
 
       // Verificar se há posição aberta
-      if(HasOpenPosition(symbol)) {
+      if (HasOpenPosition(symbol))
+      {
          continue;
       }
 
       // Verificar se o histórico está disponível
-      if(!g_assets[i].historyAvailable) {
+      if (!g_assets[i].historyAvailable)
+      {
          g_assets[i].historyAvailable = IsHistoryAvailable(symbol, MainTimeframe, g_assets[i].minRequiredBars);
-         if(!g_assets[i].historyAvailable) {
+         if (!g_assets[i].historyAvailable)
+         {
             continue;
          }
       }
 
       // ✅ VERIFICAR SE É NOVA BARRA (APENAS PARA GERAÇÃO DE SINAIS)
       datetime currentBarTime = iTime(symbol, MainTimeframe, 0);
-      if(currentBarTime == g_lastBarTimes[i]) {
+      if (currentBarTime == g_lastBarTimes[i])
+      {
          continue; // Não gerar novos sinais se não for nova barra
       }
 
@@ -592,7 +673,8 @@ void OnTick() {
       g_logger.Info("Nova barra detectada para " + symbol + " - Analisando novos sinais");
 
       // Atualizar contexto de mercado
-      if(!g_marketContext.UpdateSymbol(symbol)) {
+      if (!g_marketContext.UpdateSymbol(symbol))
+      {
          g_logger.Error("Falha ao atualizar contexto de mercado para " + symbol);
          continue;
       }
@@ -601,23 +683,26 @@ void OnTick() {
       MARKET_PHASE phase = g_marketContext.DetermineMarketPhase();
 
       // Verificar estratégias habilitadas
-      if((phase == PHASE_TREND && !EnableTrendStrategies) ||
-         (phase == PHASE_RANGE && !EnableRangeStrategies) ||
-         (phase == PHASE_REVERSAL && !EnableReversalStrategies)) {
+      if ((phase == PHASE_TREND && !EnableTrendStrategies) ||
+          (phase == PHASE_RANGE && !EnableRangeStrategies) ||
+          (phase == PHASE_REVERSAL && !EnableReversalStrategies))
+      {
          continue;
       }
 
       // ✅ GERAR SINAL (apenas em nova barra)
-      Signal signal = GenerateSignalByPhase(symbol, phase);
-      
-      if(signal.id > 0 && signal.quality != SETUP_INVALID) {
+      Signal signal = GenerateSignalByPhase(symbol, phase); 
+      if (signal.id > 0 && signal.quality != SETUP_INVALID)
+      {
          // Verificar duplicatas
-         if(IsDuplicateSignal(symbol, signal)) {
+         if (IsDuplicateSignal(symbol, signal))
+         {
             continue;
          }
 
          // ✅ TENTAR EXECUÇÃO IMEDIATA OU ARMAZENAR COMO PENDENTE
-         if(!TryImmediateExecution(symbol, signal, phase)) {
+         if (!TryImmediateExecution(symbol, signal, phase))
+         {
             StorePendingSignal(signal, phase);
          }
       }
@@ -626,140 +711,174 @@ void OnTick() {
 //+------------------------------------------------------------------+
 //| Gerar sinal baseado na fase de mercado                           |
 //+------------------------------------------------------------------+
-Signal GenerateSignalByPhase(string symbol, MARKET_PHASE phase) {
+Signal GenerateSignalByPhase(string symbol, MARKET_PHASE phase)
+{
    Signal signal;
-   
-   switch(phase) {
-      case PHASE_TREND:
-         signal = g_signalEngine.GenerateTrendSignals(symbol, MainTimeframe);
-         break;
-      case PHASE_RANGE:
-         signal = g_signalEngine.GenerateRangeSignals(symbol, MainTimeframe);
-         break;
-      case PHASE_REVERSAL:
-         signal = g_signalEngine.GenerateReversalSignals(symbol, MainTimeframe);
-         break;
+
+   switch (phase)
+   {
+   case PHASE_TREND:
+      signal = g_signalEngine.GenerateTrendSignals(symbol, MainTimeframe);
+      break;
+   case PHASE_RANGE:
+      signal = g_signalEngine.GenerateRangeSignals(symbol, MainTimeframe);
+      break;
+   case PHASE_REVERSAL:
+      signal = g_signalEngine.GenerateReversalSignals(symbol, MainTimeframe);
+      break;
    }
-   
+
    return signal;
 }
 
 //+------------------------------------------------------------------+
 //| Tentar execução imediata do sinal                                |
 //+------------------------------------------------------------------+
-bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase) {
+bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase)
+{
    // Verificar se as condições de entrada estão ativas AGORA
    MqlTick lastTick;
-   if(!SymbolInfoTick(symbol, lastTick)) {
+   if (!SymbolInfoTick(symbol, lastTick))
+   {
       return false;
    }
-   
+
    double currentPrice = (lastTick.ask + lastTick.bid) / 2.0;
    double entryThreshold = 10.0; // pontos - ajustar conforme ativo
-   
+
    // Verificar se estamos próximos do preço de entrada
    bool canExecuteNow = false;
-   
-   if(signal.direction == ORDER_TYPE_BUY) {
+
+   if (signal.direction == ORDER_TYPE_BUY)
+   {
       // Para compras, verificar se preço atual está próximo ou abaixo da entrada
-      if(currentPrice <= signal.entryPrice + entryThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT)) {
-         canExecuteNow = true;
-      }
-   } else {
-      // Para vendas, verificar se preço atual está próximo ou acima da entrada
-      if(currentPrice >= signal.entryPrice - entryThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT)) {
+      if (currentPrice <= signal.entryPrice + entryThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT))
+      {
          canExecuteNow = true;
       }
    }
-   
-   if(canExecuteNow) {
+   else
+   {
+      // Para vendas, verificar se preço atual está próximo ou acima da entrada
+      if (currentPrice >= signal.entryPrice - entryThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT))
+      {
+         canExecuteNow = true;
+      }
+   }
+
+   if (canExecuteNow)
+   {
       // Executar imediatamente
       OrderRequest request = g_riskManager.BuildRequest(symbol, signal, phase);
-      
-      if(request.volume > 0) {
-         if(g_tradeExecutor.Execute(request)) {
+
+      if (request.volume > 0)
+      {
+         if (g_tradeExecutor.Execute(request))
+         {
             StoreLastSignal(symbol, signal);
             g_logger.Info("Sinal executado imediatamente para " + symbol);
+            // REGISTRAR NO JSON LOGGER
+            if (g_jsonLogger != NULL)
+            {
+               g_jsonLogger.AddOrder(MAGIC_NUMBER, signal, request);
+            }
             return true;
          }
       }
    }
-   
+
    return false;
 }
 
 //+------------------------------------------------------------------+
 //| Armazenar sinal como pendente                                    |
 //+------------------------------------------------------------------+
-void StorePendingSignal(Signal &signal, MARKET_PHASE phase) {
+void StorePendingSignal(Signal &signal, MARKET_PHASE phase)
+{
    // Encontrar slot livre ou substituir o mais antigo
    int index = -1;
    datetime oldestTime = TimeCurrent();
    int oldestIndex = 0;
-   
-   for(int i = 0; i < 10; i++) {
-      if(!g_pendingSignals[i].isActive) {
+
+   for (int i = 0; i < 10; i++)
+   {
+      if (!g_pendingSignals[i].isActive)
+      {
          index = i;
          break;
       }
-      
-      if(g_pendingSignals[i].signal.generatedTime < oldestTime) {
+
+      if (g_pendingSignals[i].signal.generatedTime < oldestTime)
+      {
          oldestTime = g_pendingSignals[i].signal.generatedTime;
          oldestIndex = i;
       }
    }
-   
-   if(index < 0) {
+
+   if (index < 0)
+   {
       index = oldestIndex; // Substituir o mais antigo
    }
-   
+
    // Armazenar sinal pendente
    g_pendingSignals[index].signal = signal;
    g_pendingSignals[index].expiry = TimeCurrent() + 3600; // Expira em 1 hora
    g_pendingSignals[index].isActive = true;
-   
+
    g_logger.Info("Sinal armazenado como pendente para " + signal.symbol + " (expira em 1h)");
 }
 
 //+------------------------------------------------------------------+
 //| Processar sinais pendentes a cada tick                           |
 //+------------------------------------------------------------------+
-void ProcessPendingSignals() {
+void ProcessPendingSignals()
+{
    datetime currentTime = TimeCurrent();
-   
-   for(int i = 0; i < 10; i++) {
-      if(!g_pendingSignals[i].isActive) {
+
+   for (int i = 0; i < 10; i++)
+   {
+      if (!g_pendingSignals[i].isActive)
+      {
          continue;
       }
-      
+
       // Verificar expiração
-      if(currentTime > g_pendingSignals[i].expiry) {
+      if (currentTime > g_pendingSignals[i].expiry)
+      {
          g_pendingSignals[i].isActive = false;
          g_logger.Debug("Sinal pendente expirado para " + g_pendingSignals[i].signal.symbol);
          continue;
       }
-      
+
       // Verificar se ainda não há posição aberta
-      if(HasOpenPosition(g_pendingSignals[i].signal.symbol)) {
+      if (HasOpenPosition(g_pendingSignals[i].signal.symbol))
+      {
          g_pendingSignals[i].isActive = false;
          continue;
       }
-      
+
       // Verificar condições de entrada
-      if(CheckSignalEntryConditions(g_pendingSignals[i].signal)) {
+      if (CheckSignalEntryConditions(g_pendingSignals[i].signal))
+      {
          // Executar sinal pendente
          MARKET_PHASE phase = g_pendingSignals[i].signal.marketPhase;
-         OrderRequest request = g_riskManager.BuildRequest(g_pendingSignals[i].signal.symbol, 
-                                                          g_pendingSignals[i].signal, 
-                                                          phase);
-         
-         if(request.volume > 0) {
-            if(g_tradeExecutor.Execute(request)) {
+         OrderRequest request = g_riskManager.BuildRequest(g_pendingSignals[i].signal.symbol,
+                                                           g_pendingSignals[i].signal,
+                                                           phase);
+
+         if (request.volume > 0)
+         {
+            if (g_tradeExecutor.Execute(request))
+            {
                StoreLastSignal(g_pendingSignals[i].signal.symbol, g_pendingSignals[i].signal);
                g_logger.Info("Sinal pendente executado para " + g_pendingSignals[i].signal.symbol);
+               if (g_jsonLogger != NULL)
+               {
+                  g_jsonLogger.AddOrder(MAGIC_NUMBER, g_pendingSignals[i].signal, request);
+               }
             }
          }
-         
+
          // Desativar sinal (executado ou falhou)
          g_pendingSignals[i].isActive = false;
       }
@@ -769,22 +888,27 @@ void ProcessPendingSignals() {
 //+------------------------------------------------------------------+
 //| Verificar condições de entrada para sinal pendente               |
 //+------------------------------------------------------------------+
-bool CheckSignalEntryConditions(Signal &signal) {
+bool CheckSignalEntryConditions(Signal &signal)
+{
    MqlTick lastTick;
-   if(!SymbolInfoTick(signal.symbol, lastTick)) {
+   if (!SymbolInfoTick(signal.symbol, lastTick))
+   {
       return false;
    }
-   
+
    double currentPrice = (lastTick.ask + lastTick.bid) / 2.0;
    double point = SymbolInfoDouble(signal.symbol, SYMBOL_POINT);
    double entryThreshold = 5.0 * point; // 5 pontos de tolerância
-   
+
    // Verificar condições específicas baseadas na direção
-   if(signal.direction == ORDER_TYPE_BUY) {
+   if (signal.direction == ORDER_TYPE_BUY)
+   {
       // Para compra: preço atual deve estar próximo ou melhor que entrada
       return (currentPrice <= signal.entryPrice + entryThreshold);
-   } else {
-      // Para venda: preço atual deve estar próximo ou melhor que entrada  
+   }
+   else
+   {
+      // Para venda: preço atual deve estar próximo ou melhor que entrada
       return (currentPrice >= signal.entryPrice - entryThreshold);
    }
 }
@@ -792,11 +916,14 @@ bool CheckSignalEntryConditions(Signal &signal) {
 //+------------------------------------------------------------------+
 //| Função para limpar sinais pendentes expirados (chamada no timer) |
 //+------------------------------------------------------------------+
-void CleanupExpiredSignals() {
+void CleanupExpiredSignals()
+{
    datetime currentTime = TimeCurrent();
-   
-   for(int i = 0; i < 10; i++) {
-      if(g_pendingSignals[i].isActive && currentTime > g_pendingSignals[i].expiry) {
+
+   for (int i = 0; i < 10; i++)
+   {
+      if (g_pendingSignals[i].isActive && currentTime > g_pendingSignals[i].expiry)
+      {
          g_pendingSignals[i].isActive = false;
          g_logger.Debug("Limpeza: Sinal pendente expirado removido");
       }
@@ -805,27 +932,34 @@ void CleanupExpiredSignals() {
 
 //| Função para configurar breakeven manual (para trades existentes) |
 //+------------------------------------------------------------------+
-void ConfigureBreakevenForExistingTrades() {
-   if(g_tradeExecutor == NULL) return;
-   
+void ConfigureBreakevenForExistingTrades()
+{
+   if (g_tradeExecutor == NULL)
+      return;
+
    int totalPositions = PositionsTotal();
-   
-   for(int i = 0; i < totalPositions; i++) {
+
+   for (int i = 0; i < totalPositions; i++)
+   {
       ulong ticket = PositionGetTicket(i);
-      if(ticket <= 0) continue;
-      
-      if(!PositionSelectByTicket(ticket)) continue;
-      
+      if (ticket <= 0)
+         continue;
+
+      if (!PositionSelectByTicket(ticket))
+         continue;
+
       string symbol = PositionGetString(POSITION_SYMBOL);
-      
+
       // Verificar se já tem breakeven configurado
       int breakevenIndex = g_tradeExecutor.FindBreakevenConfigIndex(ticket);
-      
-      if(breakevenIndex < 0) {
+
+      if (breakevenIndex < 0)
+      {
          // Configurar breakeven para posição existente
          g_tradeExecutor.AutoConfigureBreakeven(ticket, symbol);
-         
-         if(g_logger != NULL) {
+
+         if (g_logger != NULL)
+         {
             g_logger.Info(StringFormat("Breakeven configurado para posição existente #%d (%s)", ticket, symbol));
          }
       }
@@ -838,29 +972,34 @@ void ConfigureBreakevenForExistingTrades() {
 //+------------------------------------------------------------------+
 //| 3. ATUALIZAR OnTimer() - SUBSTITUIR função existente            |
 //+------------------------------------------------------------------+
-void OnTimer() {
+void OnTimer()
+{
    // Verificar se os componentes estão inicializados
-   if(g_logger == NULL) {
+   if (g_logger == NULL)
+   {
       return;
    }
 
    // Exportar logs periodicamente (a cada hora)
    datetime currentTime = TimeCurrent();
-   if(currentTime - g_lastExportTime > 60) { // 3600 segundos = 1 hora
+   if (currentTime - g_lastExportTime > 60)
+   { // 3600 segundos = 1 hora
       // g_logger.ExportToCSV("IntegratedPA_EA_log.csv", "Timestamp,Level,Message", "");
       g_lastExportTime = currentTime;
    }
 
    // ✅ RELATÓRIO DE BREAKEVEN A CADA 5 MINUTOS
    static datetime lastBreakevenReport = 0;
-   
-   if(currentTime - lastBreakevenReport > 300) { // 5 minutos
-      if(g_tradeExecutor != NULL) {
-         //g_tradeExecutor.LogBreakevenReport();
+
+   if (currentTime - lastBreakevenReport > 300)
+   { // 5 minutos
+      if (g_tradeExecutor != NULL)
+      {
+         // g_tradeExecutor.LogBreakevenReport();
       }
       lastBreakevenReport = currentTime;
    }
-   
+
    // Limpar sinais pendentes expirados
    CleanupExpiredSignals();
 }
@@ -907,3 +1046,24 @@ void OnBookEvent(const string &symbol)
    }
 }
 //+------------------------------------------------------------------+
+ 
+//+------------------------------------------------------------------+
+//| Adicionar função para atualizar ordens no JSON                   |
+//+------------------------------------------------------------------+
+void UpdateJSONOrders()
+{
+   if(g_jsonLogger == NULL) return;
+   
+   // Percorrer todas as posições abertas
+   for(int i = PositionsTotal() - 1; i >= 0; i--) {
+      if(PositionGetSymbol(i) != "") {
+         ulong ticket = PositionGetTicket(i);
+         
+         // Verificar se é uma posição do nosso EA
+         if(PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER) {
+            // Atualizar dados da ordem
+            g_jsonLogger.UpdateOrder(ticket);
+         }
+      }
+   }
+}

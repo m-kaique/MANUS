@@ -104,6 +104,9 @@ private:
 
    void ManageBreakevens();
 
+   bool ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE orderType,
+                               double &entryPrice, double &stopLoss, double &takeProfit);
+
 public:
    // Construtores e destrutor
    CTradeExecutor();
@@ -140,8 +143,8 @@ public:
    // Métodos de acesso
    int GetLastError() const { return m_lastError; }
    string GetLastErrorDescription() const { return m_lastErrorDesc; }
-      int FindBreakevenConfigIndex(ulong ticket);
-         bool AutoConfigureBreakeven(ulong ticket, string symbol);
+   int FindBreakevenConfigIndex(ulong ticket);
+   bool AutoConfigureBreakeven(ulong ticket, string symbol);
 };
 
 //+------------------------------------------------------------------+
@@ -195,7 +198,7 @@ bool CTradeExecutor::Initialize(CLogger *logger)
    }
 
    // Configurar objeto de trade
-   m_trade.SetExpertMagicNumber(123456); // Magic number para identificar ordens deste EA
+   m_trade.SetExpertMagicNumber(MAGIC_NUMBER); // Magic number para identificar ordens deste EA
    m_trade.SetMarginMode();
    m_trade.SetTypeFillingBySymbol(Symbol());
    m_trade.SetDeviationInPoints(10); // Desvio máximo de preço em pontos
@@ -207,6 +210,121 @@ bool CTradeExecutor::Initialize(CLogger *logger)
 //+------------------------------------------------------------------+
 //| Execução de ordem                                                |
 //+------------------------------------------------------------------+
+// bool CTradeExecutor::Execute(OrderRequest &request)
+// {
+
+//    //////////////////////////////////////////////////////
+//    // 1. Verificações básicas
+//    // 2. ✅ NOVO: ValidateAndAdjustStops
+//    // 3. Log da ordem
+//    // 4. Loop de retry
+//    // 5. Execução com valores validados
+//    // 6. Tratamento de erros
+//    //////////////////////////////////////////////////////
+
+//    if (!m_tradeAllowed)
+//    {
+//       m_lastError = -1;
+//       m_lastErrorDesc = "Trading não está habilitado";
+//       m_logger.Warning(m_lastErrorDesc);
+//       return false;
+//    }
+
+//    // Verificar parâmetros
+//    if (request.symbol == "" || request.volume <= 0)
+//    {
+//       m_lastError = -2;
+//       m_lastErrorDesc = "Parâmetros de ordem inválidos";
+//       m_logger.Error(m_lastErrorDesc);
+//       return false;
+//    }
+
+//    // Registrar detalhes da ordem
+//    m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
+//                               request.symbol,
+//                               request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
+//                               request.volume,
+//                               request.price,
+//                               request.stopLoss,
+//                               request.takeProfit));
+
+//    // Executar ordem com retry
+//    bool result = false;
+//    int retries = 0;
+
+//    while (retries < m_maxRetries && !result)
+//    {
+//       if (retries > 0)
+//       {
+//          m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
+//          Sleep(m_retryDelay);
+//       }
+
+//       // Executar ordem de acordo com o tipo
+//       switch (request.type)
+//       {
+//       case ORDER_TYPE_BUY:
+//          result = m_trade.Buy(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
+//          break;
+//       case ORDER_TYPE_SELL:
+//          result = m_trade.Sell(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
+//          break;
+//       case ORDER_TYPE_BUY_LIMIT:
+//          result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+//          break;
+//       case ORDER_TYPE_SELL_LIMIT:
+//          result = m_trade.SellLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+//          break;
+//       case ORDER_TYPE_BUY_STOP:
+//          result = m_trade.BuyStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+//          break;
+//       case ORDER_TYPE_SELL_STOP:
+//          result = m_trade.SellStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
+//          break;
+//       default:
+//          m_lastError = -3;
+//          m_lastErrorDesc = "Tipo de ordem não suportado";
+//          m_logger.Error(m_lastErrorDesc);
+//          return false;
+//       }
+
+//       // Verificar resultado
+//       if (!result)
+//       {
+//          m_lastError = (int)m_trade.ResultRetcode();
+//          m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
+
+//          // Verificar se o erro é recuperável
+//          if (!IsRetryableError(m_lastError))
+//          {
+//             m_logger.Error(m_lastErrorDesc);
+//             return false;
+//          }
+//       }
+
+//       retries++;
+//    }
+
+//    // Verificar resultado final
+//    if (result)
+//    {
+//       ulong ticket = m_trade.ResultOrder();
+//       m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", ticket));
+
+//       // CONFIGURAR BREAKEVEN AUTOMATICAMENTE
+//       if (ticket > 0)
+//       {
+//          AutoConfigureBreakeven(ticket, request.symbol);
+//       }
+
+//       return true;
+//    }
+//    else
+//    {
+//       m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
+//       return false;
+//    }
+// }
 bool CTradeExecutor::Execute(OrderRequest &request)
 {
    // Verificar se trading está permitido
@@ -227,6 +345,23 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       return false;
    }
 
+   // ✅ NOVA VALIDAÇÃO: Ajustar stops ANTES da execução
+   double adjustedEntry = request.price;
+   double adjustedSL = request.stopLoss;
+   double adjustedTP = request.takeProfit;
+   
+   if(!ValidateAndAdjustStops(request.symbol, request.type, adjustedEntry, adjustedSL, adjustedTP)) {
+      m_lastError = -4;
+      m_lastErrorDesc = "Falha na validação dos stops";
+      m_logger.Error(m_lastErrorDesc);
+      return false;
+   }
+   
+   // Atualizar valores no request
+   request.price = adjustedEntry;
+   request.stopLoss = adjustedSL;
+   request.takeProfit = adjustedTP;
+
    // Registrar detalhes da ordem
    m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
                               request.symbol,
@@ -246,16 +381,28 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       {
          m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
          Sleep(m_retryDelay);
+         
+         // ✅ Re-validar stops a cada tentativa (preços podem ter mudado)
+         if(!ValidateAndAdjustStops(request.symbol, request.type, request.price, request.stopLoss, request.takeProfit)) {
+            m_logger.Error("Falha na re-validação dos stops");
+            return false;
+         }
+      }
+
+      // ✅ Para ordens de mercado, usar preço 0 (execução ao melhor preço disponível)
+      double executionPrice = request.price;
+      if(request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL) {
+         executionPrice = 0; // Deixar o MT5 usar o preço de mercado atual
       }
 
       // Executar ordem de acordo com o tipo
       switch (request.type)
       {
       case ORDER_TYPE_BUY:
-         result = m_trade.Buy(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
+         result = m_trade.Buy(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
          break;
       case ORDER_TYPE_SELL:
-         result = m_trade.Sell(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
+         result = m_trade.Sell(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
          break;
       case ORDER_TYPE_BUY_LIMIT:
          result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
@@ -281,6 +428,14 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       {
          m_lastError = (int)m_trade.ResultRetcode();
          m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
+
+         // ✅ Log detalhado do erro
+         if(m_logger != NULL) {
+            m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s", 
+                                      m_lastErrorDesc, 
+                                      m_lastError,
+                                      m_trade.ResultRetcodeDescription()));
+         }
 
          // Verificar se o erro é recuperável
          if (!IsRetryableError(m_lastError))
@@ -876,75 +1031,88 @@ bool CTradeExecutor::IsRetryableError(int errorCode)
 //+------------------------------------------------------------------+
 //| Calcular stop loss para trailing stop fixo                       |
 //+------------------------------------------------------------------+
-double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoints) {
-   if(ticket <= 0 || fixedPoints <= 0) {
+double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoints)
+{
+   if (ticket <= 0 || fixedPoints <= 0)
+   {
       return 0.0;
    }
-   
-   if(!PositionSelectByTicket(ticket)) {
+
+   if (!PositionSelectByTicket(ticket))
+   {
       return 0.0;
    }
-   
+
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    string symbol = PositionGetString(POSITION_SYMBOL);
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   
-   if(entryPrice <= 0 || currentPrice <= 0 || point <= 0) {
+
+   if (entryPrice <= 0 || currentPrice <= 0 || point <= 0)
+   {
       return 0.0;
    }
-   
+
    // ✅ APLICAR MULTIPLICADOR MAIS CONSERVADOR BASEADO NO SÍMBOLO
    double adjustedPoints = fixedPoints;
-   
-   if(StringFind(symbol, "WIN") >= 0) {
+
+   if (StringFind(symbol, "WIN") >= 0)
+   {
       adjustedPoints = MathMax(fixedPoints, 200); // Mínimo 200 pontos para WIN
    }
-   else if(StringFind(symbol, "WDO") >= 0) {
-      adjustedPoints = MathMax(fixedPoints, 10);  // Mínimo 10 pontos para WDO
+   else if (StringFind(symbol, "WDO") >= 0)
+   {
+      adjustedPoints = MathMax(fixedPoints, 10); // Mínimo 10 pontos para WDO
    }
-   else if(StringFind(symbol, "BIT") >= 0) {
+   else if (StringFind(symbol, "BIT") >= 0)
+   {
       adjustedPoints = MathMax(fixedPoints, 300); // Mínimo 300 USD para BTC
    }
-   
+
    double stopDistance = adjustedPoints * point;
    double newStopLoss = 0.0;
-   
-   if(posType == POSITION_TYPE_BUY) {
+
+   if (posType == POSITION_TYPE_BUY)
+   {
       newStopLoss = currentPrice - stopDistance;
-      
+
       // ✅ NÃO PERMITIR STOP ABAIXO DA ENTRADA (proteção de capital)
       newStopLoss = MathMax(newStopLoss, entryPrice - (entryPrice - entryPrice) * 0.05); // Máximo 5% de perda da entrada
-      
+
       // Verificar se está em lucro
-      if(currentPrice <= entryPrice) {
+      if (currentPrice <= entryPrice)
+      {
          return 0.0;
       }
-   } 
-   else if(posType == POSITION_TYPE_SELL) {
+   }
+   else if (posType == POSITION_TYPE_SELL)
+   {
       newStopLoss = currentPrice + stopDistance;
-      
+
       // ✅ NÃO PERMITIR STOP ACIMA DA ENTRADA (proteção de capital)
       newStopLoss = MathMin(newStopLoss, entryPrice + (entryPrice - entryPrice) * 0.05); // Máximo 5% de perda da entrada
-      
+
       // Verificar se está em lucro
-      if(currentPrice >= entryPrice) {
+      if (currentPrice >= entryPrice)
+      {
          return 0.0;
       }
-   } 
-   else {
+   }
+   else
+   {
       return 0.0;
    }
-   
+
    newStopLoss = NormalizeDouble(newStopLoss, digits);
-   
-   if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("Trailing stop fixo CONSERVADOR calculado para #%d: %.5f (ajustado: %.1f pontos)", 
-                                ticket, newStopLoss, adjustedPoints));
+
+   if (m_logger != NULL)
+   {
+      m_logger.Debug(StringFormat("Trailing stop fixo CONSERVADOR calculado para #%d: %.5f (ajustado: %.1f pontos)",
+                                  ticket, newStopLoss, adjustedPoints));
    }
-   
+
    return newStopLoss;
 }
 //+------------------------------------------------------------------+
@@ -1236,99 +1404,117 @@ double CTradeExecutor::CalculateMATrailingStop(string symbol, ENUM_TIMEFRAMES ti
    return newStopLoss;
 }
 //+------------------------------------------------------------------+
- 
+
 //+------------------------------------------------------------------+
 //| Gerenciar trailing stops (chamado a cada tick)                   |
 //+------------------------------------------------------------------+
-void CTradeExecutor::ManageTrailingStops() {
+void CTradeExecutor::ManageTrailingStops()
+{
    int size = ArraySize(m_trailingConfigs);
-   if(size == 0) return;
-   
+   if (size == 0)
+      return;
+
    // ✅ CONTROLE DE TEMPO - NÃO ATUALIZAR A CADA TICK
    static datetime lastTrailingUpdate = 0;
    datetime currentTime = TimeCurrent();
-   
-   if(currentTime - lastTrailingUpdate < TRAILING_UPDATE_INTERVAL) {
+
+   if (currentTime - lastTrailingUpdate < TRAILING_UPDATE_INTERVAL)
+   {
       return; // Só atualizar a cada 30 segundos
    }
    lastTrailingUpdate = currentTime;
-   
-   for(int i = size - 1; i >= 0; i--) {
+
+   for (int i = size - 1; i >= 0; i--)
+   {
       // Verificar se a posição ainda existe
-      if(!PositionSelectByTicket(m_trailingConfigs[i].ticket)) {
+      if (!PositionSelectByTicket(m_trailingConfigs[i].ticket))
+      {
          RemoveTrailingConfig(i);
          size--;
          continue;
       }
-      
+
       // ✅ VERIFICAR SE A POSIÇÃO ESTÁ EM LUCRO SUFICIENTE
-      if(!IsPositionReadyForTrailing(m_trailingConfigs[i].ticket)) {
+      if (!IsPositionReadyForTrailing(m_trailingConfigs[i].ticket))
+      {
          continue;
       }
-      
+
       // Calcular novo stop loss
       double newStopLoss = CalculateNewTrailingStop(i);
-      
-      if(newStopLoss > 0 && ShouldUpdateStopLoss(i, newStopLoss)) {
+
+      if (newStopLoss > 0 && ShouldUpdateStopLoss(i, newStopLoss))
+      {
          double takeProfit = PositionGetDouble(POSITION_TP);
-         
-         if(ModifyPosition(m_trailingConfigs[i].ticket, newStopLoss, takeProfit)) {
+
+         if (ModifyPosition(m_trailingConfigs[i].ticket, newStopLoss, takeProfit))
+         {
             m_trailingConfigs[i].lastStopLoss = newStopLoss;
             m_trailingConfigs[i].lastUpdateTime = TimeCurrent();
-            
-            if(m_logger != NULL) {
-               m_logger.Info(StringFormat("Trailing stop atualizado para ticket #%d: %.5f", 
-                                        m_trailingConfigs[i].ticket, newStopLoss));
+
+            if (m_logger != NULL)
+            {
+               m_logger.Info(StringFormat("Trailing stop atualizado para ticket #%d: %.5f",
+                                          m_trailingConfigs[i].ticket, newStopLoss));
             }
          }
       }
    }
 }
 
-
 //+------------------------------------------------------------------+
 //| ✅ NOVA FUNÇÃO: Verificar se posição está pronta para trailing  |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket) {
-   if(!PositionSelectByTicket(ticket)) {
+bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
+{
+   if (!PositionSelectByTicket(ticket))
+   {
       return false;
    }
-   
+
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    double stopLoss = PositionGetDouble(POSITION_SL);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    string symbol = PositionGetString(POSITION_SYMBOL);
-   
+
    // Calcular lucro atual em pontos
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    double profitPoints = 0;
-   
-   if(posType == POSITION_TYPE_BUY) {
+
+   if (posType == POSITION_TYPE_BUY)
+   {
       profitPoints = (currentPrice - entryPrice) / point;
-   } else {
+   }
+   else
+   {
       profitPoints = (entryPrice - currentPrice) / point;
    }
-   
+
    // ✅ SÓ ATIVAR TRAILING SE HOUVER LUCRO MÍNIMO
    bool hasMinimumProfit = (profitPoints >= TRAILING_MIN_PROFIT_POINTS);
-   
+
    // ✅ VERIFICAR R:R MÍNIMO PARA ATIVAÇÃO
    bool hasMinimumRR = false;
-   if(stopLoss > 0) {
+   if (stopLoss > 0)
+   {
       double riskPoints = 0;
-      if(posType == POSITION_TYPE_BUY) {
+      if (posType == POSITION_TYPE_BUY)
+      {
          riskPoints = (entryPrice - stopLoss) / point;
-      } else {
+      }
+      else
+      {
          riskPoints = (stopLoss - entryPrice) / point;
       }
-      
-      if(riskPoints > 0) {
+
+      if (riskPoints > 0)
+      {
          double currentRR = profitPoints / riskPoints;
          hasMinimumRR = (currentRR >= TRAILING_ACTIVATION_RR);
       }
    }
-   
+
    return hasMinimumProfit && hasMinimumRR;
 }
 
@@ -1364,35 +1550,44 @@ double CTradeExecutor::CalculateNewTrailingStop(int configIndex)
 //+------------------------------------------------------------------+
 //| Verificar se stop loss deve ser atualizado                       |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss) {
-   if(configIndex < 0 || configIndex >= ArraySize(m_trailingConfigs)) {
+bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
+{
+   if (configIndex < 0 || configIndex >= ArraySize(m_trailingConfigs))
+   {
       return false;
    }
-   
+
    double currentStopLoss = PositionGetDouble(POSITION_SL);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    string symbol = m_trailingConfigs[configIndex].symbol;
-   
+
    // ✅ DEFINIR MELHORIA MÍNIMA BASEADA NO SÍMBOLO
    double minImprovement = 0;
-   
-   if(StringFind(symbol, "WIN") >= 0) {
+
+   if (StringFind(symbol, "WIN") >= 0)
+   {
       minImprovement = 50; // 50 pontos para WIN
    }
-   else if(StringFind(symbol, "WDO") >= 0) {
-      minImprovement = 3;  // 3 pontos para WDO
+   else if (StringFind(symbol, "WDO") >= 0)
+   {
+      minImprovement = 3; // 3 pontos para WDO
    }
-   else if(StringFind(symbol, "BIT") >= 0) {
+   else if (StringFind(symbol, "BIT") >= 0)
+   {
       minImprovement = 100; // 100 USD para BTC
    }
-   else {
+   else
+   {
       minImprovement = SymbolInfoDouble(symbol, SYMBOL_POINT) * 20; // 20 pontos padrão
    }
-   
+
    // ✅ VERIFICAR SE HÁ MELHORIA SIGNIFICATIVA
-   if(posType == POSITION_TYPE_BUY) {
+   if (posType == POSITION_TYPE_BUY)
+   {
       return (newStopLoss > currentStopLoss + minImprovement);
-   } else {
+   }
+   else
+   {
       return (newStopLoss < currentStopLoss - minImprovement);
    }
 }
@@ -1774,219 +1969,263 @@ void CTradeExecutor::ManageBreakevens()
 //+------------------------------------------------------------------+
 //| Verificar se deve acionar breakeven                              |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::ShouldTriggerBreakeven(int configIndex) {
-   if(configIndex < 0 || configIndex >= ArraySize(m_breakevenConfigs)) {
+bool CTradeExecutor::ShouldTriggerBreakeven(int configIndex)
+{
+   if (configIndex < 0 || configIndex >= ArraySize(m_breakevenConfigs))
+   {
       return false;
    }
-   
+
    BreakevenConfig config = m_breakevenConfigs[configIndex];
-   
-   if(!PositionSelectByTicket(config.ticket)) {
+
+   if (!PositionSelectByTicket(config.ticket))
+   {
       return false;
    }
-   
+
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    double stopLoss = PositionGetDouble(POSITION_SL);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   
+
    double point = SymbolInfoDouble(config.symbol, SYMBOL_POINT);
    double profitPoints = 0;
-   
+
    // Calcular lucro atual em pontos
-   if(posType == POSITION_TYPE_BUY) {
+   if (posType == POSITION_TYPE_BUY)
+   {
       profitPoints = (currentPrice - entryPrice) / point;
-   } else {
+   }
+   else
+   {
       profitPoints = (entryPrice - currentPrice) / point;
    }
-   
+
    // Verificar se está em lucro
-   if(profitPoints <= 0) {
+   if (profitPoints <= 0)
+   {
       return false;
    }
-   
+
    double triggerLevel = 0;
-   
-   switch(config.breakevenType) {
-      case BREAKEVEN_FIXED:
-         triggerLevel = config.triggerPoints;
-         break;
-         
-      case BREAKEVEN_ATR:
-         {
-            double atr = CalculateATRForBreakeven(config.symbol, config.ticket);
-            if(atr > 0) {
-               triggerLevel = (atr / point) * config.atrMultiplier;
-            }
-         }
-         break;
-         
-      case BREAKEVEN_RISK_RATIO:
-         {
-            if(stopLoss > 0) {
-               double riskPoints = 0;
-               if(posType == POSITION_TYPE_BUY) {
-                  riskPoints = (entryPrice - stopLoss) / point;
-               } else {
-                  riskPoints = (stopLoss - entryPrice) / point;
-               }
-               triggerLevel = riskPoints * config.riskRatio;
-            }
-         }
-         break;
+
+   switch (config.breakevenType)
+   {
+   case BREAKEVEN_FIXED:
+      triggerLevel = config.triggerPoints;
+      break;
+
+   case BREAKEVEN_ATR:
+   {
+      double atr = CalculateATRForBreakeven(config.symbol, config.ticket);
+      if (atr > 0)
+      {
+         triggerLevel = (atr / point) * config.atrMultiplier;
+      }
    }
-   
+   break;
+
+   case BREAKEVEN_RISK_RATIO:
+   {
+      if (stopLoss > 0)
+      {
+         double riskPoints = 0;
+         if (posType == POSITION_TYPE_BUY)
+         {
+            riskPoints = (entryPrice - stopLoss) / point;
+         }
+         else
+         {
+            riskPoints = (stopLoss - entryPrice) / point;
+         }
+         triggerLevel = riskPoints * config.riskRatio;
+      }
+   }
+   break;
+   }
+
    bool shouldTrigger = (profitPoints >= triggerLevel);
-   
-   if(shouldTrigger && m_logger != NULL) {
-      m_logger.Debug(StringFormat("Breakeven trigger detectado para #%d: lucro %.1f >= trigger %.1f pontos", 
-                                 config.ticket, profitPoints, triggerLevel));
+
+   if (shouldTrigger && m_logger != NULL)
+   {
+      m_logger.Debug(StringFormat("Breakeven trigger detectado para #%d: lucro %.1f >= trigger %.1f pontos",
+                                  config.ticket, profitPoints, triggerLevel));
    }
-   
+
    return shouldTrigger;
 }
 
 //+------------------------------------------------------------------+
 //| Executar breakeven                                               |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::ExecuteBreakeven(int configIndex) {
-   if(configIndex < 0 || configIndex >= ArraySize(m_breakevenConfigs)) {
+bool CTradeExecutor::ExecuteBreakeven(int configIndex)
+{
+   if (configIndex < 0 || configIndex >= ArraySize(m_breakevenConfigs))
+   {
       return false;
    }
-   
+
    BreakevenConfig config = m_breakevenConfigs[configIndex];
-   
-   if(!PositionSelectByTicket(config.ticket)) {
+
+   if (!PositionSelectByTicket(config.ticket))
+   {
       return false;
    }
-   
+
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double takeProfit = PositionGetDouble(POSITION_TP);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   
+
    double point = SymbolInfoDouble(config.symbol, SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(config.symbol, SYMBOL_DIGITS);
-   
+
    // Calcular novo stop loss (entrada + offset)
    double newStopLoss = 0;
-   
-   if(posType == POSITION_TYPE_BUY) {
+
+   if (posType == POSITION_TYPE_BUY)
+   {
       newStopLoss = entryPrice + (config.breakevenOffset * point);
-   } else {
+   }
+   else
+   {
       newStopLoss = entryPrice - (config.breakevenOffset * point);
    }
-   
+
    newStopLoss = NormalizeDouble(newStopLoss, digits);
-   
+
    // Verificar se o novo stop loss é válido e melhor que o atual
    double currentStopLoss = PositionGetDouble(POSITION_SL);
    bool isImprovement = false;
-   
-   if(posType == POSITION_TYPE_BUY) {
+
+   if (posType == POSITION_TYPE_BUY)
+   {
       isImprovement = (newStopLoss > currentStopLoss || currentStopLoss == 0);
-   } else {
+   }
+   else
+   {
       isImprovement = (newStopLoss < currentStopLoss || currentStopLoss == 0);
    }
-   
-   if(!isImprovement) {
-      if(m_logger != NULL) {
-         m_logger.Debug(StringFormat("Breakeven não aplicado para #%d: novo SL %.5f não é melhor que atual %.5f", 
-                                   config.ticket, newStopLoss, currentStopLoss));
+
+   if (!isImprovement)
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Debug(StringFormat("Breakeven não aplicado para #%d: novo SL %.5f não é melhor que atual %.5f",
+                                     config.ticket, newStopLoss, currentStopLoss));
       }
       return false;
    }
-   
+
    // Executar modificação
-   if(ModifyPosition(config.ticket, newStopLoss, takeProfit)) {
+   if (ModifyPosition(config.ticket, newStopLoss, takeProfit))
+   {
       config.wasTriggered = true;
-      
-      if(m_logger != NULL) {
-         m_logger.Info(StringFormat("BREAKEVEN ACIONADO para #%d: SL movido para %.5f (entrada + %.1f pontos)", 
-                                   config.ticket, newStopLoss, config.breakevenOffset));
+
+      if (m_logger != NULL)
+      {
+         m_logger.Info(StringFormat("BREAKEVEN ACIONADO para #%d: SL movido para %.5f (entrada + %.1f pontos)",
+                                    config.ticket, newStopLoss, config.breakevenOffset));
       }
-      
+
       return true;
-   } else {
-      if(m_logger != NULL) {
-         m_logger.Error(StringFormat("Falha ao executar breakeven para #%d: %s", 
-                                   config.ticket, GetLastErrorDescription()));
+   }
+   else
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Error(StringFormat("Falha ao executar breakeven para #%d: %s",
+                                     config.ticket, GetLastErrorDescription()));
       }
    }
-   
+
    return false;
 }
 
 //+------------------------------------------------------------------+
 //| Encontrar índice de configuração de breakeven                    |
 //+------------------------------------------------------------------+
-int CTradeExecutor::FindBreakevenConfigIndex(ulong ticket) {
+int CTradeExecutor::FindBreakevenConfigIndex(ulong ticket)
+{
    int size = ArraySize(m_breakevenConfigs);
-   
-   for(int i = 0; i < size; i++) {
-      if(m_breakevenConfigs[i].ticket == ticket) {
+
+   for (int i = 0; i < size; i++)
+   {
+      if (m_breakevenConfigs[i].ticket == ticket)
+      {
          return i;
       }
    }
-   
+
    return -1;
 }
 
 //+------------------------------------------------------------------+
 //| Remover configuração de breakeven                                |
 //+------------------------------------------------------------------+
-void CTradeExecutor::RemoveBreakevenConfig(int index) {
+void CTradeExecutor::RemoveBreakevenConfig(int index)
+{
    int size = ArraySize(m_breakevenConfigs);
-   if(index < 0 || index >= size) return;
-   
+   if (index < 0 || index >= size)
+      return;
+
    // Mover elementos
-   for(int i = index; i < size - 1; i++) {
+   for (int i = index; i < size - 1; i++)
+   {
       m_breakevenConfigs[i] = m_breakevenConfigs[i + 1];
    }
-   
+
    ArrayResize(m_breakevenConfigs, size - 1);
 }
 
 //+------------------------------------------------------------------+
 //| Calcular ATR para breakeven                                      |
 //+------------------------------------------------------------------+
-double CTradeExecutor::CalculateATRForBreakeven(string symbol, ulong ticket) {
+double CTradeExecutor::CalculateATRForBreakeven(string symbol, ulong ticket)
+{
    int atrHandle = iATR(symbol, PERIOD_CURRENT, 14);
-   if(atrHandle == INVALID_HANDLE) {
+   if (atrHandle == INVALID_HANDLE)
+   {
       return 0.0;
    }
-   
+
    double atrBuffer[];
    ArraySetAsSeries(atrBuffer, true);
-   
+
    int copied = CopyBuffer(atrHandle, 0, 0, 1, atrBuffer);
    IndicatorRelease(atrHandle);
-   
-   if(copied <= 0) {
+
+   if (copied <= 0)
+   {
       return 0.0;
    }
-   
+
    return atrBuffer[0];
 }
 
 //+------------------------------------------------------------------+
 //| Configuração automática de breakeven em novas posições           |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::AutoConfigureBreakeven(ulong ticket, string symbol) {
+bool CTradeExecutor::AutoConfigureBreakeven(ulong ticket, string symbol)
+{
    // Configurar breakeven padrão baseado no símbolo
-   
-   if(StringFind(symbol, "WIN") >= 0) {
+
+   if (StringFind(symbol, "WIN") >= 0)
+   {
       // WIN: Breakeven em 100 pontos com offset de 10 pontos
       return SetBreakevenFixed(ticket, 100.0, 10.0);
    }
-   else if(StringFind(symbol, "WDO") >= 0) {
+   else if (StringFind(symbol, "WDO") >= 0)
+   {
       // WDO: Breakeven em 30 pontos com offset de 5 pontos
       return SetBreakevenFixed(ticket, 30.0, 5.0);
    }
-   else if(StringFind(symbol, "BIT") >= 0) {
+   else if (StringFind(symbol, "BIT") >= 0)
+   {
       // BTC: Breakeven baseado em ATR
       return SetBreakevenATR(ticket, 1.0, 50.0);
    }
-   else {
+   else
+   {
       // Padrão: Breakeven em 1:1 R:R
       return SetBreakevenRiskRatio(ticket, 1.0, 5.0);
    }
@@ -1995,24 +2234,27 @@ bool CTradeExecutor::AutoConfigureBreakeven(ulong ticket, string symbol) {
 //+------------------------------------------------------------------+
 //| ATUALIZAÇÃO da função ManageOpenPositions para incluir breakeven |
 //+------------------------------------------------------------------+
-void CTradeExecutor::ManageOpenPositions() {
-   if(!m_tradeAllowed) {
+void CTradeExecutor::ManageOpenPositions()
+{
+   if (!m_tradeAllowed)
+   {
       return;
    }
-   
+
    datetime currentTime = TimeCurrent();
    static datetime lastFullCheck = 0;
-   
+
    // ✅ GERENCIAMENTO A CADA TICK
-   ManageBreakevens();      // ← ADICIONADO
+   ManageBreakevens(); // ← ADICIONADO
    ManageTrailingStops();
    ManagePartialTakeProfits();
-   
+
    // ✅ VERIFICAÇÃO COMPLETA A CADA 10 SEGUNDOS
-   if(currentTime - lastFullCheck >= 10) {
+   if (currentTime - lastFullCheck >= 10)
+   {
       ManagePositionRisk();
       CleanupInvalidConfigurations();
-      CleanupBreakevenConfigs();  // ← ADICIONADO
+      CleanupBreakevenConfigs(); // ← ADICIONADO
       lastFullCheck = currentTime;
    }
 }
@@ -2020,10 +2262,179 @@ void CTradeExecutor::ManageOpenPositions() {
 //+------------------------------------------------------------------+
 //| Limpar configurações de breakeven inválidas                      |
 //+------------------------------------------------------------------+
-void CTradeExecutor::CleanupBreakevenConfigs() {
-   for(int i = ArraySize(m_breakevenConfigs) - 1; i >= 0; i--) {
-      if(!PositionSelectByTicket(m_breakevenConfigs[i].ticket)) {
+void CTradeExecutor::CleanupBreakevenConfigs()
+{
+   for (int i = ArraySize(m_breakevenConfigs) - 1; i >= 0; i--)
+   {
+      if (!PositionSelectByTicket(m_breakevenConfigs[i].ticket))
+      {
          RemoveBreakevenConfig(i);
       }
    }
+}
+
+
+
+//+------------------------------------------------------------------+
+//| Valida e ajusta stops para respeitar regras do broker           |
+//| - Verifica STOPLEVEL mínimo                                      |
+//| - Ajusta stops muito próximos                                    |
+//| - Normaliza preços para tick size                                |
+//| Retorna: true se válido, false se impossível ajustar             |
+//+------------------------------------------------------------------+ 
+// Novo método para validar e ajustar stops antes da execução
+bool CTradeExecutor::ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE orderType,
+                                            double &entryPrice, double &stopLoss, double &takeProfit)
+{
+
+   // Obter informações do símbolo
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double stopLevel = SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+
+   // Se stopLevel for 0, usar valor mínimo seguro
+   if (stopLevel == 0)
+   {
+      stopLevel = 5 * tickSize; // 5 ticks mínimo
+   }
+
+   // Obter preço atual de mercado
+   MqlTick lastTick;
+   if (!SymbolInfoTick(symbol, lastTick))
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Error("ValidateAndAdjustStops: Falha ao obter tick para " + symbol);
+      }
+      return false;
+   }
+
+   // Determinar preço de referência baseado no tipo de ordem
+   double referencePrice = 0;
+
+   if (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_STOP || orderType == ORDER_TYPE_BUY_LIMIT)
+   {
+      referencePrice = lastTick.ask;
+
+      // Para ordens de compra
+      // Stop Loss deve estar abaixo do ASK - stopLevel
+      double minStopDistance = stopLevel + lastTick.ask - lastTick.bid; // Incluir spread
+      double maxStopLoss = lastTick.ask - minStopDistance;
+
+      if (stopLoss > maxStopLoss)
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("ValidateAndAdjustStops: Ajustando SL de compra de %.5f para %.5f (stopLevel: %.5f)",
+                                          stopLoss, maxStopLoss, stopLevel));
+         }
+         stopLoss = NormalizeDouble(maxStopLoss, digits);
+      }
+
+      // Take Profit deve estar acima do ASK + stopLevel
+      if (takeProfit > 0 && takeProfit < lastTick.ask + stopLevel)
+      {
+         takeProfit = NormalizeDouble(lastTick.ask + stopLevel + tickSize, digits);
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("ValidateAndAdjustStops: Ajustando TP de compra para %.5f", takeProfit));
+         }
+      }
+   }
+   else
+   { // SELL orders
+      referencePrice = lastTick.bid;
+
+      // Para ordens de venda
+      // Stop Loss deve estar acima do BID + stopLevel
+      double minStopDistance = stopLevel + lastTick.ask - lastTick.bid; // Incluir spread
+      double minStopLoss = lastTick.bid + minStopDistance;
+
+      if (stopLoss < minStopLoss)
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("ValidateAndAdjustStops: Ajustando SL de venda de %.5f para %.5f (stopLevel: %.5f)",
+                                          stopLoss, minStopLoss, stopLevel));
+         }
+         stopLoss = NormalizeDouble(minStopLoss, digits);
+      }
+
+      // Take Profit deve estar abaixo do BID - stopLevel
+      if (takeProfit > 0 && takeProfit > lastTick.bid - stopLevel)
+      {
+         takeProfit = NormalizeDouble(lastTick.bid - stopLevel - tickSize, digits);
+         if (m_logger != NULL)
+         {
+            m_logger.Warning(StringFormat("ValidateAndAdjustStops: Ajustando TP de venda para %.5f", takeProfit));
+         }
+      }
+   }
+
+   // Normalizar todos os preços para o tick size do símbolo
+   entryPrice = NormalizeDouble(MathRound(entryPrice / tickSize) * tickSize, digits);
+   stopLoss = NormalizeDouble(MathRound(stopLoss / tickSize) * tickSize, digits);
+   if (takeProfit > 0)
+   {
+      takeProfit = NormalizeDouble(MathRound(takeProfit / tickSize) * tickSize, digits);
+   }
+
+   // Validação final
+   if (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_STOP || orderType == ORDER_TYPE_BUY_LIMIT)
+   {
+      if (stopLoss >= entryPrice)
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Error(StringFormat("ValidateAndAdjustStops: SL de compra (%.5f) >= entrada (%.5f)",
+                                        stopLoss, entryPrice));
+         }
+         return false;
+      }
+      if (takeProfit > 0 && takeProfit <= entryPrice)
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Error(StringFormat("ValidateAndAdjustStops: TP de compra (%.5f) <= entrada (%.5f)",
+                                        takeProfit, entryPrice));
+         }
+         return false;
+      }
+   }
+   else
+   {
+      if (stopLoss <= entryPrice)
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Error(StringFormat("ValidateAndAdjustStops: SL de venda (%.5f) <= entrada (%.5f)",
+                                        stopLoss, entryPrice));
+         }
+         return false;
+      }
+      if (takeProfit > 0 && takeProfit >= entryPrice)
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Error(StringFormat("ValidateAndAdjustStops: TP de venda (%.5f) >= entrada (%.5f)",
+                                        takeProfit, entryPrice));
+         }
+         return false;
+      }
+   }
+
+   // Log final dos valores ajustados
+   if (m_logger != NULL)
+   {
+      m_logger.Info(StringFormat("ValidateAndAdjustStops: %s %s - Entry: %.5f, SL: %.5f (dist: %.1f pts), TP: %.5f",
+                                 symbol,
+                                 (orderType == ORDER_TYPE_BUY || orderType == ORDER_TYPE_BUY_STOP || orderType == ORDER_TYPE_BUY_LIMIT) ? "BUY" : "SELL",
+                                 entryPrice,
+                                 stopLoss,
+                                 MathAbs(entryPrice - stopLoss) / point,
+                                 takeProfit));
+   }
+
+   return true;
 }

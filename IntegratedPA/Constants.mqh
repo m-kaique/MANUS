@@ -8,6 +8,8 @@
 #property version   "5.00"
 #property strict
 
+
+#define MAGIC_NUMBER             123456
 //+------------------------------------------------------------------+
 //| Constantes Padronizadas - Baseadas no Cap-14 do Guia            |
 //+------------------------------------------------------------------+
@@ -134,12 +136,25 @@
 
 // ❌ PROBLEMA: Valores muito baixos para stops
 // WIN (Mini Índice Bovespa) - Valores em pontos - CORRIGIDO
-#define WIN_SPIKE_MAX_STOP          500   // Stop máximo durante spike (era 200)
-#define WIN_CHANNEL_MAX_STOP        350   // Stop máximo durante canal (era 150)
-#define WIN_FIRST_TARGET            800   // Primeiro alvo (era 500)
-#define WIN_SECOND_TARGET           1500  // Segundo alvo (era 1000)
+// AJUSTES RECOMENDADOS BASEADOS NA ANÁLISE DO BACKTEST
+
+// STOPS - Aumentados para reduzir exits prematuros
+#define WIN_SPIKE_MAX_STOP          1200  // Stop máximo durante spike (era 800)
+#define WIN_CHANNEL_MAX_STOP        1000  // Stop máximo durante canal (era 800)
+
+// TARGETS - Otimizados para melhor R:R
+#define WIN_FIRST_TARGET            800   // Primeiro alvo (era 500) - R:R 2:1 mínimo
+#define WIN_SECOND_TARGET           2000  // Segundo alvo (era 1500) - R:R 4:1
+
+// TRAILING - Ajustado para capturar mais movimento
 #define WIN_TRAILING_STOP           400   // Trailing stop (era 350)
-#define WIN_MIN_STOP_DISTANCE       300   // NOVO: Distância mínima do stop
+#define WIN_MIN_STOP_DISTANCE       300   // Distância mínima (era 250)
+
+// NOVOS PARÂMETROS SUGERIDOS
+#define WIN_BREAKEVEN_TRIGGER       400   // Move SL para BE após este lucro
+#define WIN_PARTIAL_CLOSE_1         400   // Fecha 50% da posição no 1º alvo
+#define WIN_MAX_HOLDING_BARS        240   // Máximo 12h em M3 (240 * 3min)
+
 
 // WDO (Mini Dólar) - Valores em pontos - CORRIGIDO
 #define WDO_SPIKE_MAX_STOP          15    // Stop máximo durante spike (era 7)
