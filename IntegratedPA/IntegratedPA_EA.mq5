@@ -67,6 +67,11 @@ AssetConfig g_assets[];
 // Array ultimos sinais por simbolo
 LastSignalInfo g_lastSignals [10];
 int g_lastSignalCount = 0;
+
+// Array de sinais pendentes
+PendingSignal g_pendingSignals[10]; 
+int g_pendingSignalCount = 0;
+
 // Variáveis para controle de tempo
 datetime g_lastBarTimes[];
 datetime g_lastExportTime = 0;
@@ -482,7 +487,7 @@ int OnInit()
    { // Timer a cada 60 segundos
       g_logger.Warning("Falha ao configurar timer");
    }
-
+   ConfigureBreakevenForExistingTrades();
    g_logger.Info("Expert Advisor iniciado com sucesso");
    return (INIT_SUCCEEDED);
 }
@@ -570,7 +575,9 @@ void OnDeinit(const int reason)
    }
 }
 
-// MODIFICAR OnTick() - versão corrigida
+//+------------------------------------------------------------------+
+//| Função OnTick() CORRIGIDA                                        |
+//+------------------------------------------------------------------+
 void OnTick() {
    // Verificar se os componentes estão inicializados
    if(g_logger == NULL || g_marketContext == NULL || g_signalEngine == NULL ||
@@ -579,10 +586,14 @@ void OnTick() {
       return;
    }
 
-   // Atualizar informações da conta
+   // 1. GERENCIAMENTO CONTÍNUO DE POSIÇÕES (A CADA TICK)
+   g_tradeExecutor.ManageOpenPositions();
    g_riskManager.UpdateAccountInfo();
 
-   // Processar cada ativo configurado
+   // 2. VERIFICAR E EXECUTAR SINAIS PENDENTES (A CADA TICK)
+   ProcessPendingSignals();
+
+   // 3. GERAÇÃO DE NOVOS SINAIS (APENAS EM NOVA BARRA)
    for(int i = 0; i < ArraySize(g_assets); i++) {
       string symbol = g_assets[i].symbol;
 
@@ -591,11 +602,8 @@ void OnTick() {
          continue;
       }
 
-      // VERIFICAR SE JÁ EXISTE POSIÇÃO ABERTA
+      // Verificar se há posição aberta
       if(HasOpenPosition(symbol)) {
-         if(g_logger != NULL) {
-            g_logger.Debug(StringFormat("Posição já aberta para %s - pulando novo sinal", symbol));
-         }
          continue;
       }
 
@@ -603,24 +611,20 @@ void OnTick() {
       if(!g_assets[i].historyAvailable) {
          g_assets[i].historyAvailable = IsHistoryAvailable(symbol, MainTimeframe, g_assets[i].minRequiredBars);
          if(!g_assets[i].historyAvailable) {
-            g_logger.Debug("Histórico ainda não disponível para " + symbol);
             continue;
-         }
-         else {
-            g_logger.Info("Histórico agora disponível para " + symbol);
          }
       }
 
-      // Verificar se é uma nova barra
+      // ✅ VERIFICAR SE É NOVA BARRA (APENAS PARA GERAÇÃO DE SINAIS)
       datetime currentBarTime = iTime(symbol, MainTimeframe, 0);
       if(currentBarTime == g_lastBarTimes[i]) {
-         continue; // Não processar se não for uma nova barra
+         continue; // Não gerar novos sinais se não for nova barra
       }
 
       g_lastBarTimes[i] = currentBarTime;
-      g_logger.Info("Nova barra detectada para " + symbol + " em " + EnumToString(MainTimeframe));
+      g_logger.Info("Nova barra detectada para " + symbol + " - Analisando novos sinais");
 
-      // Atualizar contexto de mercado para o símbolo atual
+      // Atualizar contexto de mercado
       if(!g_marketContext.UpdateSymbol(symbol)) {
          g_logger.Error("Falha ao atualizar contexto de mercado para " + symbol);
          continue;
@@ -628,20 +632,37 @@ void OnTick() {
 
       // Determinar fase de mercado
       MARKET_PHASE phase = g_marketContext.DetermineMarketPhase();
-      g_logger.Info("Fase de mercado para " + symbol + ": " + EnumToString(phase));
 
-      // Verificar se devemos gerar sinais para esta fase
+      // Verificar estratégias habilitadas
       if((phase == PHASE_TREND && !EnableTrendStrategies) ||
          (phase == PHASE_RANGE && !EnableRangeStrategies) ||
          (phase == PHASE_REVERSAL && !EnableReversalStrategies)) {
-         g_logger.Info("Estratégias para fase " + EnumToString(phase) + " desabilitadas");
          continue;
       }
 
-      // Gerar sinal de acordo com a fase de mercado
-      Signal signal;
+      // ✅ GERAR SINAL (apenas em nova barra)
+      Signal signal = GenerateSignalByPhase(symbol, phase);
+      
+      if(signal.id > 0 && signal.quality != SETUP_INVALID) {
+         // Verificar duplicatas
+         if(IsDuplicateSignal(symbol, signal)) {
+            continue;
+         }
 
-      switch(phase) {
+         // ✅ TENTAR EXECUÇÃO IMEDIATA OU ARMAZENAR COMO PENDENTE
+         if(!TryImmediateExecution(symbol, signal, phase)) {
+            StorePendingSignal(signal, phase);
+         }
+      }
+   }
+}
+//+------------------------------------------------------------------+
+//| Gerar sinal baseado na fase de mercado                           |
+//+------------------------------------------------------------------+
+Signal GenerateSignalByPhase(string symbol, MARKET_PHASE phase) {
+   Signal signal;
+   
+   switch(phase) {
       case PHASE_TREND:
          signal = g_signalEngine.GenerateTrendSignals(symbol, MainTimeframe);
          break;
@@ -651,63 +672,230 @@ void OnTick() {
       case PHASE_REVERSAL:
          signal = g_signalEngine.GenerateReversalSignals(symbol, MainTimeframe);
          break;
+   }
+   
+   return signal;
+}
+
+//+------------------------------------------------------------------+
+//| Tentar execução imediata do sinal                                |
+//+------------------------------------------------------------------+
+bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase) {
+   // Verificar se as condições de entrada estão ativas AGORA
+   MqlTick lastTick;
+   if(!SymbolInfoTick(symbol, lastTick)) {
+      return false;
+   }
+   
+   double currentPrice = (lastTick.ask + lastTick.bid) / 2.0;
+   double entryThreshold = 10.0; // pontos - ajustar conforme ativo
+   
+   // Verificar se estamos próximos do preço de entrada
+   bool canExecuteNow = false;
+   
+   if(signal.direction == ORDER_TYPE_BUY) {
+      // Para compras, verificar se preço atual está próximo ou abaixo da entrada
+      if(currentPrice <= signal.entryPrice + entryThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT)) {
+         canExecuteNow = true;
       }
-
-      // Verificar se o sinal é válido
-      if(signal.id == 0 || signal.quality == SETUP_INVALID) {
-         g_logger.Debug("Nenhum sinal válido gerado para " + symbol);
-         continue;
-      }
-
-      // VERIFICAR SE É SINAL DUPLICADO
-      if(IsDuplicateSignal(symbol, signal)) {
-         continue; // Pular sinal duplicado
-      }
-
-      g_logger.Info("Sinal gerado para " + symbol + ": " +
-                   (signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda") +
-                   ", Qualidade: " + EnumToString(signal.quality));
-
-      // Criar requisição de ordem
-      OrderRequest request;
-      request = g_riskManager.BuildRequest(symbol, signal, phase);
-
-      // Verificar se a requisição é válida
-      if(request.volume <= 0 || request.price <= 0) {
-         g_logger.Error("Parâmetros de ordem inválidos");
-         continue;
-      }
-
-      // Executar ordem
-      if(g_tradeExecutor.Execute(request)) {
-         // ARMAZENAR ÚLTIMO SINAL APENAS SE A ORDEM FOI EXECUTADA
-         StoreLastSignal(symbol, signal);
-      } else {
-         g_logger.Error("Falha ao executar ordem para " + symbol + ": " + g_tradeExecutor.GetLastErrorDescription());
+   } else {
+      // Para vendas, verificar se preço atual está próximo ou acima da entrada
+      if(currentPrice >= signal.entryPrice - entryThreshold * SymbolInfoDouble(symbol, SYMBOL_POINT)) {
+         canExecuteNow = true;
       }
    }
-
-   // Gerenciar posições abertas
-   g_tradeExecutor.ManageOpenPositions();
+   
+   if(canExecuteNow) {
+      // Executar imediatamente
+      OrderRequest request = g_riskManager.BuildRequest(symbol, signal, phase);
+      
+      if(request.volume > 0) {
+         if(g_tradeExecutor.Execute(request)) {
+            StoreLastSignal(symbol, signal);
+            g_logger.Info("Sinal executado imediatamente para " + symbol);
+            return true;
+         }
+      }
+   }
+   
+   return false;
 }
+
+//+------------------------------------------------------------------+
+//| Armazenar sinal como pendente                                    |
+//+------------------------------------------------------------------+
+void StorePendingSignal(Signal &signal, MARKET_PHASE phase) {
+   // Encontrar slot livre ou substituir o mais antigo
+   int index = -1;
+   datetime oldestTime = TimeCurrent();
+   int oldestIndex = 0;
+   
+   for(int i = 0; i < 10; i++) {
+      if(!g_pendingSignals[i].isActive) {
+         index = i;
+         break;
+      }
+      
+      if(g_pendingSignals[i].signal.generatedTime < oldestTime) {
+         oldestTime = g_pendingSignals[i].signal.generatedTime;
+         oldestIndex = i;
+      }
+   }
+   
+   if(index < 0) {
+      index = oldestIndex; // Substituir o mais antigo
+   }
+   
+   // Armazenar sinal pendente
+   g_pendingSignals[index].signal = signal;
+   g_pendingSignals[index].expiry = TimeCurrent() + 3600; // Expira em 1 hora
+   g_pendingSignals[index].isActive = true;
+   
+   g_logger.Info("Sinal armazenado como pendente para " + signal.symbol + " (expira em 1h)");
+}
+
+//+------------------------------------------------------------------+
+//| Processar sinais pendentes a cada tick                           |
+//+------------------------------------------------------------------+
+void ProcessPendingSignals() {
+   datetime currentTime = TimeCurrent();
+   
+   for(int i = 0; i < 10; i++) {
+      if(!g_pendingSignals[i].isActive) {
+         continue;
+      }
+      
+      // Verificar expiração
+      if(currentTime > g_pendingSignals[i].expiry) {
+         g_pendingSignals[i].isActive = false;
+         g_logger.Debug("Sinal pendente expirado para " + g_pendingSignals[i].signal.symbol);
+         continue;
+      }
+      
+      // Verificar se ainda não há posição aberta
+      if(HasOpenPosition(g_pendingSignals[i].signal.symbol)) {
+         g_pendingSignals[i].isActive = false;
+         continue;
+      }
+      
+      // Verificar condições de entrada
+      if(CheckSignalEntryConditions(g_pendingSignals[i].signal)) {
+         // Executar sinal pendente
+         MARKET_PHASE phase = g_pendingSignals[i].signal.marketPhase;
+         OrderRequest request = g_riskManager.BuildRequest(g_pendingSignals[i].signal.symbol, 
+                                                          g_pendingSignals[i].signal, 
+                                                          phase);
+         
+         if(request.volume > 0) {
+            if(g_tradeExecutor.Execute(request)) {
+               StoreLastSignal(g_pendingSignals[i].signal.symbol, g_pendingSignals[i].signal);
+               g_logger.Info("Sinal pendente executado para " + g_pendingSignals[i].signal.symbol);
+            }
+         }
+         
+         // Desativar sinal (executado ou falhou)
+         g_pendingSignals[i].isActive = false;
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Verificar condições de entrada para sinal pendente               |
+//+------------------------------------------------------------------+
+bool CheckSignalEntryConditions(Signal &signal) {
+   MqlTick lastTick;
+   if(!SymbolInfoTick(signal.symbol, lastTick)) {
+      return false;
+   }
+   
+   double currentPrice = (lastTick.ask + lastTick.bid) / 2.0;
+   double point = SymbolInfoDouble(signal.symbol, SYMBOL_POINT);
+   double entryThreshold = 5.0 * point; // 5 pontos de tolerância
+   
+   // Verificar condições específicas baseadas na direção
+   if(signal.direction == ORDER_TYPE_BUY) {
+      // Para compra: preço atual deve estar próximo ou melhor que entrada
+      return (currentPrice <= signal.entryPrice + entryThreshold);
+   } else {
+      // Para venda: preço atual deve estar próximo ou melhor que entrada  
+      return (currentPrice >= signal.entryPrice - entryThreshold);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Função para limpar sinais pendentes expirados (chamada no timer) |
+//+------------------------------------------------------------------+
+void CleanupExpiredSignals() {
+   datetime currentTime = TimeCurrent();
+   
+   for(int i = 0; i < 10; i++) {
+      if(g_pendingSignals[i].isActive && currentTime > g_pendingSignals[i].expiry) {
+         g_pendingSignals[i].isActive = false;
+         g_logger.Debug("Limpeza: Sinal pendente expirado removido");
+      }
+   }
+}
+
+//| Função para configurar breakeven manual (para trades existentes) |
+//+------------------------------------------------------------------+
+void ConfigureBreakevenForExistingTrades() {
+   if(g_tradeExecutor == NULL) return;
+   
+   int totalPositions = PositionsTotal();
+   
+   for(int i = 0; i < totalPositions; i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket <= 0) continue;
+      
+      if(!PositionSelectByTicket(ticket)) continue;
+      
+      string symbol = PositionGetString(POSITION_SYMBOL);
+      
+      // Verificar se já tem breakeven configurado
+      int breakevenIndex = g_tradeExecutor.FindBreakevenConfigIndex(ticket);
+      
+      if(breakevenIndex < 0) {
+         // Configurar breakeven para posição existente
+         g_tradeExecutor.AutoConfigureBreakeven(ticket, symbol);
+         
+         if(g_logger != NULL) {
+            g_logger.Info(StringFormat("Breakeven configurado para posição existente #%d (%s)", ticket, symbol));
+         }
+      }
+   }
+}
+
 //+------------------------------------------------------------------+
 //| Função de processamento de timer                                 |
 //+------------------------------------------------------------------+
-void OnTimer()
-{
+//+------------------------------------------------------------------+
+//| 3. ATUALIZAR OnTimer() - SUBSTITUIR função existente            |
+//+------------------------------------------------------------------+
+void OnTimer() {
    // Verificar se os componentes estão inicializados
-   if (g_logger == NULL)
-   {
+   if(g_logger == NULL) {
       return;
    }
 
    // Exportar logs periodicamente (a cada hora)
    datetime currentTime = TimeCurrent();
-   if (currentTime - g_lastExportTime > 60)
-   { // 3600 segundos = 1 hora
+   if(currentTime - g_lastExportTime > 60) { // 3600 segundos = 1 hora
       // g_logger.ExportToCSV("IntegratedPA_EA_log.csv", "Timestamp,Level,Message", "");
       g_lastExportTime = currentTime;
    }
+
+   // ✅ RELATÓRIO DE BREAKEVEN A CADA 5 MINUTOS
+   static datetime lastBreakevenReport = 0;
+   
+   if(currentTime - lastBreakevenReport > 300) { // 5 minutos
+      if(g_tradeExecutor != NULL) {
+         //g_tradeExecutor.LogBreakevenReport();
+      }
+      lastBreakevenReport = currentTime;
+   }
+   
+   // Limpar sinais pendentes expirados
+   CleanupExpiredSignals();
 }
 
 //+------------------------------------------------------------------+

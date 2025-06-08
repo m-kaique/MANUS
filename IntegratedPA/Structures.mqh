@@ -197,3 +197,39 @@ struct AssetConfig
    bool historyAvailable; // Flag para indicar se o histórico está disponível
    int minRequiredBars;   // Mínimo de barras necessárias para análise
 };
+
+//+------------------------------------------------------------------+
+//| Estrutura para armazenar sinais pendentes                        |
+//+------------------------------------------------------------------+
+struct PendingSignal {
+   Signal signal;
+   datetime expiry;
+   bool isActive;
+   
+   PendingSignal() {
+      expiry = 0;
+      isActive = false;
+   }
+};
+
+
+// Enumeração para tipos de breakeven
+enum ENUM_BREAKEVEN_TYPE {
+   BREAKEVEN_FIXED,        // Breakeven em pontos fixos
+   BREAKEVEN_ATR,          // Breakeven baseado em ATR
+   BREAKEVEN_RISK_RATIO    // Breakeven baseado em relação risco/retorno
+};
+
+// Estrutura para configuração de breakeven
+struct BreakevenConfig {
+   ulong                ticket;           // Ticket da posição
+   string              symbol;           // Símbolo
+   ENUM_BREAKEVEN_TYPE breakevenType;    // Tipo de breakeven
+   double              triggerPoints;    // Pontos para ativar breakeven
+   double              breakevenOffset;  // Offset do breakeven (pontos além da entrada)
+   double              atrMultiplier;    // Multiplicador ATR para trigger
+   double              riskRatio;        // Relação R:R para ativar (ex: 1.0 = 1:1)
+   bool                isActive;         // Se breakeven está ativo
+   bool                wasTriggered;     // Se já foi movido para breakeven
+   datetime            configTime;       // Quando foi configurado
+};
