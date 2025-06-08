@@ -418,20 +418,9 @@ bool CSignalEngine::IsValidSignal(Signal &signal)
 //+------------------------------------------------------------------+
 Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAMES timeframe)
 {
-   Print("GENERATESPIKEANDCHANNELSIGNAL @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@");
+   
    Signal signal;
    signal.id = 0; // Sinal vazio/inválido por padrão
-
-   // Verificar se os dados são válidos
-   // if (!m_hasValidData)
-   // {
-   //    if (m_logger != NULL)
-   //    {
-   //       m_logger.Debug("SignalEngine: Dados inválidos para geração de sinal Spike & Channel");
-   //    }
-   //    return signal;
-   // }
-   // Implementação básica - será expandida posteriormente
 
    // Verificar se o mercado está em tendência
    if (m_marketContext != NULL && !m_marketContext.IsTrendUp() && !m_marketContext.IsTrendDown())

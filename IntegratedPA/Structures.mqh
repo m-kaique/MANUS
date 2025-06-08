@@ -171,3 +171,29 @@ struct MarketState {
       lastPhaseChange = 0;
    }
 };
+
+struct LastSignalInfo {
+   string symbol;
+   datetime signalTime;
+   ENUM_ORDER_TYPE direction;
+   double entryPrice;
+   bool isActive;
+};
+
+// Estrutura para armazenar parâmetros dos ativos
+struct AssetConfig
+{
+   string symbol;
+   bool enabled;
+   double minLot;
+   double maxLot;
+   double lotStep;
+   double tickValue;
+   int digits;
+   double riskPercentage;
+   bool usePartials;
+   double partialLevels[3];
+   double partialVolumes[3];
+   bool historyAvailable; // Flag para indicar se o histórico está disponível
+   int minRequiredBars;   // Mínimo de barras necessárias para análise
+};

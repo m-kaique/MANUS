@@ -367,24 +367,39 @@ ConfluenceFactors CSetupClassifier::AnalyzeConfluence(string symbol, ENUM_TIMEFR
 //+------------------------------------------------------------------+
 //| Verificar qualidade do padrão                                    |
 //+------------------------------------------------------------------+
-bool CSetupClassifier::CheckPatternQuality(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal)
-{
+bool CSetupClassifier::CheckPatternQuality(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal) {
+   bool hasQuality = false;
+   
    // Verificar se o padrão tem características bem definidas
-   // Este método deve ser adaptado para cada estratégia específica
-
-   // Por enquanto, verificar se a descrição contém informações do padrão
-   if (signal.strategy == "Spike and Channel")
-   {
+   if(signal.strategy == "Spike and Channel") {
       // Verificar se o sinal tem dados consistentes
-      if (signal.entryPrice > 0 && signal.stopLoss > 0 && signal.takeProfits[0] > 0)
-      {
-         return true;
+      if(signal.entryPrice > 0 && signal.stopLoss > 0 && signal.takeProfits[0] > 0) {
+         // Verificar se o stop loss está no lado correto
+         if(signal.direction == ORDER_TYPE_BUY && signal.stopLoss < signal.entryPrice) {
+            hasQuality = true;
+         } else if(signal.direction == ORDER_TYPE_SELL && signal.stopLoss > signal.entryPrice) {
+            hasQuality = true;
+         }
+         
+         // Verificar se o primeiro take profit está no lado correto
+         if(hasQuality) {
+            if(signal.direction == ORDER_TYPE_BUY && signal.takeProfits[0] <= signal.entryPrice) {
+               hasQuality = false;
+            } else if(signal.direction == ORDER_TYPE_SELL && signal.takeProfits[0] >= signal.entryPrice) {
+               hasQuality = false;
+            }
+         }
       }
    }
-
-   // Adicionar verificações específicas para outros padrões
-
-   return false;
+   
+   // Log detalhado para debugging
+   if(m_logger != NULL) {
+      m_logger.Debug(StringFormat("SetupClassifier: PatternQuality para %s (%s): %s - Entry:%.5f, SL:%.5f, TP1:%.5f", 
+                                symbol, signal.strategy, hasQuality ? "✓" : "✗", 
+                                signal.entryPrice, signal.stopLoss, signal.takeProfits[0]));
+   }
+   
+   return hasQuality;
 }
 
 //+------------------------------------------------------------------+
@@ -628,12 +643,19 @@ bool CSetupClassifier::CheckOptimalSession(string symbol)
 //+------------------------------------------------------------------+
 //| Verificar relação risco/retorno                                  |
 //+------------------------------------------------------------------+
-bool CSetupClassifier::CheckRiskReward(Signal &signal, double minRatio)
-{
+bool CSetupClassifier::CheckRiskReward(Signal &signal, double minRatio) {
    // Recalcular R:R para garantir precisão
    signal.CalculateRiskRewardRatio();
-
-   return (signal.riskRewardRatio >= minRatio);
+   
+   bool isGoodRR = (signal.riskRewardRatio >= minRatio);
+   
+   // Log detalhado para debugging
+   if(m_logger != NULL) {
+      m_logger.Debug(StringFormat("SetupClassifier: RiskReward check - Calculado:%.2f, Mínimo:%.2f, Resultado:%s", 
+                                signal.riskRewardRatio, minRatio, isGoodRR ? "✓" : "✗"));
+   }
+   
+   return isGoodRR;
 }
 
 //+------------------------------------------------------------------+
@@ -785,3 +807,4 @@ double CSetupClassifier::CalculateSpreadMultiple(string symbol, double currentSp
 
    return (avgSpread > 0) ? currentSpread / avgSpread : 1.0;
 }
+

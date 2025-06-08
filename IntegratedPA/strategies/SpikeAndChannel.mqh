@@ -1163,78 +1163,108 @@ bool CSpikeAndChannel::DetectFalhaPullback(string symbol, ENUM_TIMEFRAMES timefr
 // 4. CORREÇÃO NA FUNÇÃO GenerateSignal
 // Problema: R:R muito baixo - ajustar multiplicadores de take profit
 //+------------------------------------------------------------------+
-Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, SPIKE_CHANNEL_ENTRY_TYPE preferredEntryType)
-{
+Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, SPIKE_CHANNEL_ENTRY_TYPE preferredEntryType) {
    Signal signal;
-
+   
    // Verificar se o padrão é válido
-   if (!pattern.isValid)
-   {
-      if (m_logger != NULL)
-      {
+   if(!pattern.isValid) {
+      if(m_logger != NULL) {
          m_logger.Warning("SpikeAndChannel: Tentativa de gerar sinal com padrão inválido");
       }
       return signal;
    }
-
+   
    // Encontrar setup de entrada
    int entryBar;
    double entryPrice, stopLoss;
-
-   if (!FindEntrySetup(symbol, timeframe, pattern, preferredEntryType, entryBar, entryPrice, stopLoss))
-   {
-      if (m_logger != NULL)
-      {
+   
+   if(!FindEntrySetup(symbol, timeframe, pattern, preferredEntryType, entryBar, entryPrice, stopLoss)) {
+      if(m_logger != NULL) {
          m_logger.Debug("SpikeAndChannel: Nenhum setup de entrada encontrado");
       }
       return signal;
    }
-
+   
+   // OBTER PREÇOS ATUAIS DO MERCADO
+   MqlTick lastTick;
+   if(!SymbolInfoTick(symbol, lastTick)) {
+      if(m_logger != NULL) {
+         m_logger.Error("SpikeAndChannel: Falha ao obter tick atual para " + symbol);
+      }
+      return signal;
+   }
+   
+   double currentPrice = (lastTick.ask + lastTick.bid) / 2.0;
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   
+   // AJUSTAR PREÇOS PARA CONDIÇÕES ATUAIS
+   if(pattern.isUptrend) {
+      // Para compras, usar ask como referência
+      signal.entryPrice = MathMax(entryPrice, lastTick.ask);
+      signal.stopLoss = MathMax(stopLoss, currentPrice - 100 * point); // Mínimo 100 pontos
+   } else {
+      // Para vendas, usar bid como referência  
+      signal.entryPrice = MathMin(entryPrice, lastTick.bid);
+      signal.stopLoss = MathMin(stopLoss, currentPrice + 100 * point); // Mínimo 100 pontos
+   }
+   
+   // Normalizar preços
+   signal.entryPrice = NormalizeDouble(signal.entryPrice, digits);
+   signal.stopLoss = NormalizeDouble(signal.stopLoss, digits);
+   
+   // VERIFICAR SE SL ESTÁ NO LADO CORRETO
+   if((pattern.isUptrend && signal.stopLoss >= signal.entryPrice) ||
+      (!pattern.isUptrend && signal.stopLoss <= signal.entryPrice)) {
+      if(m_logger != NULL) {
+         m_logger.Warning("SpikeAndChannel: Stop loss calculado do lado errado da entrada");
+      }
+      return signal;
+   }
+   
    // Preencher dados do sinal
-   signal.id = (int)GetTickCount(); // ID único baseado no tempo atual
+   signal.id = (int)GetTickCount();
    signal.symbol = symbol;
    signal.direction = pattern.isUptrend ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    signal.marketPhase = PHASE_TREND;
-   signal.quality = SETUP_B; // Qualidade padrão, será reclassificada depois
-   signal.entryPrice = entryPrice;
-   signal.stopLoss = stopLoss;
+   signal.quality = SETUP_B; // Será reclassificada depois
    signal.generatedTime = TimeCurrent();
    signal.strategy = "Spike and Channel";
    signal.isActive = true;
-
-   // CORREÇÃO: Ajustar multiplicadores para melhorar R:R
-   double riskPoints = MathAbs(entryPrice - stopLoss);
-
-   // Usar multiplicadores maiores para garantir R:R adequado
-   if (pattern.isUptrend)
-   {
-      signal.takeProfits[0] = entryPrice + riskPoints * 2.0; // 2:1 (mínimo para SETUP_B)
-      signal.takeProfits[1] = entryPrice + riskPoints * 3.0; // 3:1
-      signal.takeProfits[2] = entryPrice + riskPoints * 4.0; // 4:1
+   
+   // Calcular take profits baseado nos preços ajustados
+   double riskPoints = MathAbs(signal.entryPrice - signal.stopLoss);
+   
+   if(pattern.isUptrend) {
+      signal.takeProfits[0] = signal.entryPrice + riskPoints * 2.0;
+      signal.takeProfits[1] = signal.entryPrice + riskPoints * 3.0;
+      signal.takeProfits[2] = signal.entryPrice + riskPoints * 4.0;
+   } else {
+      signal.takeProfits[0] = signal.entryPrice - riskPoints * 2.0;
+      signal.takeProfits[1] = signal.entryPrice - riskPoints * 3.0;
+      signal.takeProfits[2] = signal.entryPrice - riskPoints * 4.0;
    }
-   else
-   {
-      signal.takeProfits[0] = entryPrice - riskPoints * 2.0; // 2:1
-      signal.takeProfits[1] = entryPrice - riskPoints * 3.0; // 3:1
-      signal.takeProfits[2] = entryPrice - riskPoints * 4.0; // 4:1
+   
+   // Normalizar take profits
+   for(int i = 0; i < 3; i++) {
+      signal.takeProfits[i] = NormalizeDouble(signal.takeProfits[i], digits);
    }
-
+   
    // Calcular relação risco/retorno
    signal.CalculateRiskRewardRatio();
-
+   
    // Descrição detalhada do sinal
-   signal.description = StringFormat("Spike and Channel (%s) - %s, R:R %.2f, Entrada: %s",
-                                     pattern.isUptrend ? "Alta" : "Baixa",
-                                     EnumToString(preferredEntryType),
-                                     signal.riskRewardRatio,
-                                     TimeToString(signal.generatedTime));
-
-   if (m_logger != NULL)
-   {
-      m_logger.Info(StringFormat("SpikeAndChannel: Sinal gerado para %s - %s, Entrada: %.5f, Stop: %.5f, R:R: %.2f",
-                                 symbol, pattern.isUptrend ? "Compra" : "Venda",
-                                 signal.entryPrice, signal.stopLoss, signal.riskRewardRatio));
+   signal.description = StringFormat("Spike and Channel (%s) - %s, R:R %.2f, Entrada: %s", 
+                                   pattern.isUptrend ? "Alta" : "Baixa", 
+                                   EnumToString(preferredEntryType),
+                                   signal.riskRewardRatio,
+                                   TimeToString(signal.generatedTime));
+   
+   if(m_logger != NULL) {
+      m_logger.Info(StringFormat("SpikeAndChannel: Sinal gerado para %s - %s, Entrada: %.5f, Stop: %.5f, R:R: %.2f", 
+                               symbol, pattern.isUptrend ? "Compra" : "Venda", 
+                               signal.entryPrice, signal.stopLoss, signal.riskRewardRatio));
    }
-
+   
    return signal;
 }

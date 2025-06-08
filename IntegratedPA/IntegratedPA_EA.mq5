@@ -61,27 +61,12 @@ CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
 
-// Estrutura para armazenar parâmetros dos ativos
-struct AssetConfig
-{
-   string symbol;
-   bool enabled;
-   double minLot;
-   double maxLot;
-   double lotStep;
-   double tickValue;
-   int digits;
-   double riskPercentage;
-   bool usePartials;
-   double partialLevels[3];
-   double partialVolumes[3];
-   bool historyAvailable; // Flag para indicar se o histórico está disponível
-   int minRequiredBars;   // Mínimo de barras necessárias para análise
-};
-
 // Array de ativos configurados
 AssetConfig g_assets[];
 
+// Array ultimos sinais por simbolo
+LastSignalInfo g_lastSignals [10];
+int g_lastSignalCount = 0;
 // Variáveis para controle de tempo
 datetime g_lastBarTimes[];
 datetime g_lastExportTime = 0;
@@ -89,6 +74,68 @@ datetime g_lastExportTime = 0;
 // Constante para o mínimo de barras necessárias
 #define MIN_REQUIRED_BARS 100
 
+
+
+
+// Função para verificar se é sinal duplicado
+bool IsDuplicateSignal(string symbol, Signal &newSignal) {
+   datetime currentTime = TimeCurrent();
+   
+   for(int i = 0; i < g_lastSignalCount; i++) {
+      if(g_lastSignals[i].symbol == symbol && 
+         g_lastSignals[i].direction == newSignal.direction &&
+         currentTime - g_lastSignals[i].signalTime < 900 && // 15 minutos
+         MathAbs(g_lastSignals[i].entryPrice - newSignal.entryPrice) < 200) { // 200 pontos
+         
+         if(g_logger != NULL) {
+            g_logger.Info(StringFormat("Sinal duplicado ignorado para %s - Último sinal há %d segundos", 
+                                     symbol, (int)(currentTime - g_lastSignals[i].signalTime)));
+         }
+         return true;
+      }
+   }
+   return false;
+}
+
+// Função para armazenar último sinal
+void StoreLastSignal(string symbol, Signal &signal) {
+   // Encontrar slot existente ou criar novo
+   int index = -1;
+   for(int i = 0; i < g_lastSignalCount; i++) {
+      if(g_lastSignals[i].symbol == symbol) {
+         index = i;
+         break;
+      }
+   }
+   
+   if(index == -1 && g_lastSignalCount < 10) {
+      index = g_lastSignalCount++;
+   }
+   
+   if(index >= 0) {
+      g_lastSignals[index].symbol = symbol;
+      g_lastSignals[index].signalTime = TimeCurrent();
+      g_lastSignals[index].direction = signal.direction;
+      g_lastSignals[index].entryPrice = signal.entryPrice;
+      g_lastSignals[index].isActive = true;
+   }
+}
+
+// Função para verificar se há posição aberta
+bool HasOpenPosition(string symbol) {
+   for(int i = 0; i < PositionsTotal(); i++) {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0) {
+         if(PositionSelectByTicket(ticket)) {
+            string posSymbol = PositionGetString(POSITION_SYMBOL);
+            if(posSymbol == symbol) {
+               return true;
+            }
+         }
+      }
+   }
+   return false;
+}
 //+------------------------------------------------------------------+
 //| Função para verificar se o histórico está disponível             |
 //+------------------------------------------------------------------+
@@ -523,15 +570,11 @@ void OnDeinit(const int reason)
    }
 }
 
-//+------------------------------------------------------------------+
-//| Função de processamento de ticks                                 |
-//+------------------------------------------------------------------+
-void OnTick()
-{
+// MODIFICAR OnTick() - versão corrigida
+void OnTick() {
    // Verificar se os componentes estão inicializados
-   if (g_logger == NULL || g_marketContext == NULL || g_signalEngine == NULL ||
-       g_riskManager == NULL || g_tradeExecutor == NULL)
-   {
+   if(g_logger == NULL || g_marketContext == NULL || g_signalEngine == NULL ||
+      g_riskManager == NULL || g_tradeExecutor == NULL) {
       Print("Componentes não inicializados");
       return;
    }
@@ -540,35 +583,37 @@ void OnTick()
    g_riskManager.UpdateAccountInfo();
 
    // Processar cada ativo configurado
-   for (int i = 0; i < ArraySize(g_assets); i++)
-   {
+   for(int i = 0; i < ArraySize(g_assets); i++) {
       string symbol = g_assets[i].symbol;
 
       // Verificar se o ativo está habilitado
-      if (!g_assets[i].enabled)
-      {
+      if(!g_assets[i].enabled) {
+         continue;
+      }
+
+      // VERIFICAR SE JÁ EXISTE POSIÇÃO ABERTA
+      if(HasOpenPosition(symbol)) {
+         if(g_logger != NULL) {
+            g_logger.Debug(StringFormat("Posição já aberta para %s - pulando novo sinal", symbol));
+         }
          continue;
       }
 
       // Verificar se o histórico está disponível
-      if (!g_assets[i].historyAvailable)
-      {
+      if(!g_assets[i].historyAvailable) {
          g_assets[i].historyAvailable = IsHistoryAvailable(symbol, MainTimeframe, g_assets[i].minRequiredBars);
-         if (!g_assets[i].historyAvailable)
-         {
+         if(!g_assets[i].historyAvailable) {
             g_logger.Debug("Histórico ainda não disponível para " + symbol);
             continue;
          }
-         else
-         {
+         else {
             g_logger.Info("Histórico agora disponível para " + symbol);
          }
       }
 
       // Verificar se é uma nova barra
       datetime currentBarTime = iTime(symbol, MainTimeframe, 0);
-      if (currentBarTime == g_lastBarTimes[i])
-      {
+      if(currentBarTime == g_lastBarTimes[i]) {
          continue; // Não processar se não for uma nova barra
       }
 
@@ -576,8 +621,7 @@ void OnTick()
       g_logger.Info("Nova barra detectada para " + symbol + " em " + EnumToString(MainTimeframe));
 
       // Atualizar contexto de mercado para o símbolo atual
-      if (!g_marketContext.UpdateSymbol(symbol))
-      {
+      if(!g_marketContext.UpdateSymbol(symbol)) {
          g_logger.Error("Falha ao atualizar contexto de mercado para " + symbol);
          continue;
       }
@@ -587,10 +631,9 @@ void OnTick()
       g_logger.Info("Fase de mercado para " + symbol + ": " + EnumToString(phase));
 
       // Verificar se devemos gerar sinais para esta fase
-      if ((phase == PHASE_TREND && !EnableTrendStrategies) ||
-          (phase == PHASE_RANGE && !EnableRangeStrategies) ||
-          (phase == PHASE_REVERSAL && !EnableReversalStrategies))
-      {
+      if((phase == PHASE_TREND && !EnableTrendStrategies) ||
+         (phase == PHASE_RANGE && !EnableRangeStrategies) ||
+         (phase == PHASE_REVERSAL && !EnableReversalStrategies)) {
          g_logger.Info("Estratégias para fase " + EnumToString(phase) + " desabilitadas");
          continue;
       }
@@ -598,8 +641,7 @@ void OnTick()
       // Gerar sinal de acordo com a fase de mercado
       Signal signal;
 
-      switch (phase)
-      {
+      switch(phase) {
       case PHASE_TREND:
          signal = g_signalEngine.GenerateTrendSignals(symbol, MainTimeframe);
          break;
@@ -612,30 +654,35 @@ void OnTick()
       }
 
       // Verificar se o sinal é válido
-      if (signal.id == 0 || signal.quality == SETUP_INVALID)
-      {
+      if(signal.id == 0 || signal.quality == SETUP_INVALID) {
          g_logger.Debug("Nenhum sinal válido gerado para " + symbol);
          continue;
       }
 
+      // VERIFICAR SE É SINAL DUPLICADO
+      if(IsDuplicateSignal(symbol, signal)) {
+         continue; // Pular sinal duplicado
+      }
+
       g_logger.Info("Sinal gerado para " + symbol + ": " +
-                    (signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda") +
-                    ", Qualidade: " + EnumToString(signal.quality));
+                   (signal.direction == ORDER_TYPE_BUY ? "Compra" : "Venda") +
+                   ", Qualidade: " + EnumToString(signal.quality));
 
       // Criar requisição de ordem
       OrderRequest request;
       request = g_riskManager.BuildRequest(symbol, signal, phase);
 
       // Verificar se a requisição é válida
-      if (request.volume <= 0 || request.price <= 0)
-      {
+      if(request.volume <= 0 || request.price <= 0) {
          g_logger.Error("Parâmetros de ordem inválidos");
          continue;
       }
 
       // Executar ordem
-      if (!g_tradeExecutor.Execute(request))
-      {
+      if(g_tradeExecutor.Execute(request)) {
+         // ARMAZENAR ÚLTIMO SINAL APENAS SE A ORDEM FOI EXECUTADA
+         StoreLastSignal(symbol, signal);
+      } else {
          g_logger.Error("Falha ao executar ordem para " + symbol + ": " + g_tradeExecutor.GetLastErrorDescription());
       }
    }
@@ -643,7 +690,6 @@ void OnTick()
    // Gerenciar posições abertas
    g_tradeExecutor.ManageOpenPositions();
 }
-
 //+------------------------------------------------------------------+
 //| Função de processamento de timer                                 |
 //+------------------------------------------------------------------+

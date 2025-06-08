@@ -351,47 +351,75 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Símbolo inválido para construção de requisição");
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
    
-   // Validar preço de entrada
+   // Validar preço de mercado
    double marketPrice = 0;
    if(!ValidateMarketPrice(symbol, marketPrice)) {
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Falha ao validar preço de mercado para " + symbol);
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
    
-   // Usar preço de mercado se o preço do sinal for inválido
-   if(signal.entryPrice <= 0) {
-      signal.entryPrice = marketPrice;
-      if(m_logger != NULL) {
-         m_logger.Warning("RiskManager: Preço de entrada inválido, usando preço de mercado: " + DoubleToString(marketPrice, 5));
-      }
-   }
-   
+   // USAR PREÇOS DO SINAL - NÃO RECALCULAR
    request.price = signal.entryPrice;
+   request.stopLoss = signal.stopLoss;
+   request.takeProfit = signal.takeProfits[0];
    request.comment = "IntegratedPA: " + EnumToString(signal.quality) + " " + EnumToString(phase);
    
-   // Calcular stop loss
-   request.stopLoss = CalculateStopLoss(symbol, signal.direction, signal.entryPrice, phase);
-   
-   // Verificar se o stop loss é válido
-   if(request.stopLoss <= 0 || 
-      (signal.direction == ORDER_TYPE_BUY && request.stopLoss >= signal.entryPrice) ||
-      (signal.direction == ORDER_TYPE_SELL && request.stopLoss <= signal.entryPrice)) {
+   // CALCULAR SPREAD CORRETAMENTE
+   MqlTick lastTick;
+   if(!SymbolInfoTick(symbol, lastTick)) {
       if(m_logger != NULL) {
-         m_logger.Error("RiskManager: Stop loss inválido calculado para " + symbol + ": " + DoubleToString(request.stopLoss, 5));
+         m_logger.Error("RiskManager: Falha ao obter tick para " + symbol);
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
    
-   // Calcular take profit
-   request.takeProfit = CalculateTakeProfit(symbol, signal.direction, signal.entryPrice, request.stopLoss);
+   double currentSpread = lastTick.ask - lastTick.bid;
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double maxDeviation = currentSpread * 3.0; // 3x o spread atual
+   
+   // VALIDAR SE PREÇOS ESTÃO PRÓXIMOS DO MERCADO
+   double priceDeviation = MathAbs(signal.entryPrice - marketPrice);
+   
+   if(priceDeviation > maxDeviation) {
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("RiskManager: Preço do sinal muito distante do mercado - Sinal:%.5f, Mercado:%.5f, Desvio:%.5f, MaxDesvio:%.5f", 
+                                     signal.entryPrice, marketPrice, priceDeviation, maxDeviation));
+      }
+      
+      // Ajustar preço para próximo do mercado
+      if(signal.direction == ORDER_TYPE_BUY) {
+         request.price = lastTick.ask;
+      } else {
+         request.price = lastTick.bid;
+      }
+      
+      if(m_logger != NULL) {
+         m_logger.Info(StringFormat("RiskManager: Preço ajustado de %.5f para %.5f", 
+                                  signal.entryPrice, request.price));
+      }
+   }
+   
+   // VALIDAR STOP LOSS
+   if(request.stopLoss <= 0 || 
+      (signal.direction == ORDER_TYPE_BUY && request.stopLoss >= request.price) ||
+      (signal.direction == ORDER_TYPE_SELL && request.stopLoss <= request.price)) {
+      if(m_logger != NULL) {
+         m_logger.Error("RiskManager: Stop loss inválido do sinal para " + symbol + ": " + DoubleToString(request.stopLoss, 5));
+      }
+      request.volume = 0;
+      return request;
+   }
+   
+   // Resto da função permanece igual...
+   // (código de cálculo de risco, volume, etc.)
    
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
@@ -400,34 +428,19 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    // Ajustar risco com base na qualidade do setup
    switch(signal.quality) {
       case SETUP_A_PLUS:
-         riskPercentage *= 1.5; // 50% a mais para setups A+
+         riskPercentage *= 1.5;
          break;
       case SETUP_A:
-         riskPercentage *= 1.2; // 20% a mais para setups A
+         riskPercentage *= 1.2;
          break;
       case SETUP_B:
-         riskPercentage *= 1.0; // Risco normal para setups B
+         riskPercentage *= 1.0;
          break;
       case SETUP_C:
-         riskPercentage *= 0.5; // 50% a menos para setups C
+         riskPercentage *= 0.5;
          break;
       default:
-         riskPercentage *= 0.3; // Risco mínimo para outros casos
-   }
-   
-   // Ajustar risco com base na fase de mercado
-   switch(phase) {
-      case PHASE_TREND:
-         riskPercentage *= 1.0; // Risco normal em tendência
-         break;
-      case PHASE_RANGE:
-         riskPercentage *= 0.8; // 20% a menos em range
-         break;
-      case PHASE_REVERSAL:
-         riskPercentage *= 0.7; // 30% a menos em reversão
-         break;
-      default:
-         riskPercentage *= 0.5; // Risco mínimo para outros casos
+         riskPercentage *= 0.3;
    }
    
    // Verificar risco total atual
@@ -438,22 +451,20 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       if(m_logger != NULL) {
          m_logger.Warning(StringFormat("RiskManager: Risco máximo de %.2f%% atingido. Operação cancelada.", m_maxTotalRisk));
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
    
-   // Limitar risco ao disponível
    riskPercentage = MathMin(riskPercentage, availableRisk);
    
-   // Calcular tamanho da posição
-   request.volume = CalculatePositionSize(symbol, signal.entryPrice, request.stopLoss, riskPercentage);
+   // Calcular tamanho da posição baseado nos preços AJUSTADOS
+   request.volume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
    
-   // Verificar se o volume é válido
    if(request.volume <= 0) {
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Volume inválido calculado para " + symbol + ": " + DoubleToString(request.volume, 2));
       }
-      request.volume = 0; // Cancelar operação
+      request.volume = 0;
       return request;
    }
    
@@ -474,9 +485,7 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    }
    
    return request;
-}
-
-//+------------------------------------------------------------------+
+}//+------------------------------------------------------------------+
 //| Calcular stop loss baseado na fase de mercado                    |
 //+------------------------------------------------------------------+
 double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType, double entryPrice, MARKET_PHASE phase) {
