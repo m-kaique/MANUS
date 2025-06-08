@@ -79,9 +79,6 @@ datetime g_lastExportTime = 0;
 // Constante para o mínimo de barras necessárias
 #define MIN_REQUIRED_BARS 100
 
-
-
-
 // Função para verificar se é sinal duplicado
 bool IsDuplicateSignal(string symbol, Signal &newSignal) {
    datetime currentTime = TimeCurrent();
@@ -246,13 +243,13 @@ bool SetupAssets() {
 
    // ✅ CONFIGURAR WIN COM NOVOS PARÂMETROS
    if(EnableWIN) {
-      g_assets[index].symbol = "WIN$";
+      g_assets[index].symbol = "WINM25";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 1.0;
       g_assets[index].maxLot = 100.0;
       g_assets[index].lotStep = 1.0;
-      g_assets[index].tickValue = SymbolInfoDouble("WIN$", SYMBOL_TRADE_TICK_VALUE);
-      g_assets[index].digits = (int)SymbolInfoInteger("WIN$", SYMBOL_DIGITS);
+      g_assets[index].tickValue = SymbolInfoDouble("WINM25", SYMBOL_TRADE_TICK_VALUE);
+      g_assets[index].digits = (int)SymbolInfoInteger("WINM25", SYMBOL_DIGITS);
       g_assets[index].riskPercentage = RiskPerTrade * 0.9; // 10% menos risco para WIN
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
@@ -267,7 +264,7 @@ bool SetupAssets() {
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.2;
 
-      if(!SymbolSelect("WIN$", true)) {
+      if(!SymbolSelect("WINM25", true)) {
          if(g_logger != NULL) {
             g_logger.Warning("Falha ao selecionar símbolo WIN$");
          }
@@ -315,7 +312,7 @@ bool ConfigureRiskParameters() {
          // WDO: Stop mais conservador  
          g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, 3.5);
       }
-      else if(g_assets[i].symbol == "WIN$") {
+      else if(g_assets[i].symbol == "WINM25") {
          // WIN: Stop mais conservador
          g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, 2.5);
       }
