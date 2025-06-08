@@ -152,8 +152,8 @@ public:
       m_session.maxDrawdown = 0;
       
       // Criar arquivo JSON inicial
-      //string filename = m_logPath + "session_" + m_session.sessionId + ".json";
       string filename = "cavalo.json";
+      //string filename = "cavalo.json";
       int handle = FileOpen(filename, FILE_WRITE|FILE_TXT|FILE_ANSI);
       
       if(handle == INVALID_HANDLE) {
@@ -175,31 +175,43 @@ public:
    }
    
    // Adicionar nova ordem
+     // Adicionar nova ordem
    void AddOrder(ulong ticket, const Signal &signal, const OrderRequest &request) {
       int index = ArraySize(m_session.orders);
       ArrayResize(m_session.orders, index + 1);
       
-      OrderLogData order = m_session.orders[index];
-      order.ticket = ticket;
-      order.openTime = TimeCurrent();
-      order.symbol = request.symbol;
-      order.strategy = signal.strategy;
-      order.setupQuality = EnumToString(signal.quality);
-      order.marketPhase = EnumToString(signal.marketPhase);
-      order.direction = (request.type == ORDER_TYPE_BUY ? "BUY" : "SELL");
-      order.volume = request.volume;
-      order.entryPrice = request.price;
-      order.stopLoss = request.stopLoss;
-      order.takeProfit = request.takeProfit;
-      //order.riskPercent = signal.ri;
-      order.riskReward = signal.riskRewardRatio;
-      // order.confluenceFactors = signal.confluenceFactors;
-      order.comment = request.comment;
-      order.status = "OPEN";
-      order.breakevenActive = false;
-      order.partialsExecuted = 0;
-      order.volumeRemaining = request.volume;
-      order.partialProfit = 0;
+      // CORREÇÃO: Atribuir diretamente ao array, não a uma cópia
+      m_session.orders[index].ticket = ticket;
+      m_session.orders[index].openTime = TimeCurrent();
+      m_session.orders[index].symbol = request.symbol;
+      m_session.orders[index].strategy = signal.strategy;
+      m_session.orders[index].setupQuality = EnumToString(signal.quality);
+      m_session.orders[index].marketPhase = EnumToString(signal.marketPhase);
+      m_session.orders[index].direction = (request.type == ORDER_TYPE_BUY ? "BUY" : "SELL");
+      m_session.orders[index].volume = request.volume;
+      m_session.orders[index].entryPrice = request.price;
+      m_session.orders[index].stopLoss = request.stopLoss;
+      m_session.orders[index].takeProfit = request.takeProfit;
+      m_session.orders[index].riskPercent = 1.0; // Usar valor padrão por enquanto
+      m_session.orders[index].riskReward = signal.riskRewardRatio;
+      m_session.orders[index].confluenceFactors = 0; // Usar valor padrão por enquanto
+      m_session.orders[index].comment = request.comment;
+      m_session.orders[index].status = "OPEN";
+      m_session.orders[index].breakevenActive = false;
+      m_session.orders[index].partialsExecuted = 0;
+      m_session.orders[index].volumeRemaining = request.volume;
+      m_session.orders[index].partialProfit = 0;
+      m_session.orders[index].closeTime = 0;
+      m_session.orders[index].closePrice = 0;
+      m_session.orders[index].finalProfit = 0;
+      m_session.orders[index].closeReason = "";
+      m_session.orders[index].currentPrice = request.price;
+      m_session.orders[index].profit = 0;
+      m_session.orders[index].maxProfit = 0;
+      m_session.orders[index].maxDrawdown = 0;
+      m_session.orders[index].trailingDistance = 0;
+      m_session.orders[index].trailingType = "";
+      m_session.orders[index].breakevenLevel = 0;
       
       m_session.totalOrders++;
       
@@ -367,7 +379,7 @@ private:
    
    // Atualizar arquivo JSON
    void UpdateSessionFile() {
-      string filename = m_logPath + "session_" + m_session.sessionId + ".json";
+      string filename = "cavalo.json";
       int handle = FileOpen(filename, FILE_WRITE|FILE_TXT|FILE_ANSI);
       
       if(handle != INVALID_HANDLE) {
