@@ -388,8 +388,6 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   g_logger.Info("Iniciando Expert Advisor...");
-
    // Inicializar o logger JSON após o logger principal
    g_jsonLogger = new CJSONLogger(g_logger);
    if (g_jsonLogger == NULL)
@@ -398,8 +396,10 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+   g_logger.Info("Iniciando Expert Advisor...");
+
    // Iniciar nova sessão de trading
-   if (!g_jsonLogger.StartSession("xxxx"))
+   if (!g_jsonLogger.StartSession("4885"))
    {
       g_logger.Error("Falha ao iniciar sessão JSON");
       // Não é crítico, continuar sem JSON logging
@@ -494,7 +494,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_tradeExecutor.Initialize(g_logger))
+   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger))
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
       return (INIT_FAILED);
@@ -614,9 +614,11 @@ int tickCounter = 0;
 //| Função OnTick() CORRIGIDA                                        |
 //+------------------------------------------------------------------+
 void OnTick()
-{   tickCounter++;
-   
-   if(tickCounter >= 10) { // Atualizar a cada 10 ticks
+{
+   tickCounter++;
+
+   if (tickCounter >= 10)
+   { // Atualizar a cada 10 ticks
       UpdateJSONOrders();
       tickCounter = 0;
    }
@@ -691,7 +693,7 @@ void OnTick()
       }
 
       // ✅ GERAR SINAL (apenas em nova barra)
-      Signal signal = GenerateSignalByPhase(symbol, phase); 
+      Signal signal = GenerateSignalByPhase(symbol, phase);
       if (signal.id > 0 && signal.quality != SETUP_INVALID)
       {
          // Verificar duplicatas
@@ -777,11 +779,42 @@ bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase)
          {
             StoreLastSignal(symbol, signal);
             g_logger.Info("Sinal executado imediatamente para " + symbol);
-            // REGISTRAR NO JSON LOGGER
+
+            // REGISTRAR NO JSON LOGGER com ticket real
             if (g_jsonLogger != NULL)
             {
-               g_jsonLogger.AddOrder(MAGIC_NUMBER, signal, request);
+               // Obter ticket da última ordem executada
+               ulong lastTicket = 0;
+               for (int j = OrdersTotal() - 1; j >= 0; j--)
+               {
+                  ulong ticket = OrderGetTicket(j);
+                  if (ticket > 0 && OrderGetInteger(ORDER_MAGIC) == MAGIC_NUMBER)
+                  {
+                     lastTicket = ticket;
+                     break;
+                  }
+               }
+
+               // Se não encontrou em ordens pendentes, procurar em posições
+               if (lastTicket == 0)
+               {
+                  for (int j = PositionsTotal() - 1; j >= 0; j--)
+                  {
+                     ulong ticket = PositionGetTicket(j);
+                     if (ticket > 0 && PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER)
+                     {
+                        lastTicket = ticket;
+                        break;
+                     }
+                  }
+               }
+
+               if (lastTicket > 0)
+               {
+                  g_jsonLogger.AddOrder(lastTicket, signal, request);
+               }
             }
+
             return true;
          }
       }
@@ -872,9 +905,40 @@ void ProcessPendingSignals()
             {
                StoreLastSignal(g_pendingSignals[i].signal.symbol, g_pendingSignals[i].signal);
                g_logger.Info("Sinal pendente executado para " + g_pendingSignals[i].signal.symbol);
+
+               // REGISTRAR NO JSON LOGGER com ticket real
                if (g_jsonLogger != NULL)
                {
-                  g_jsonLogger.AddOrder(MAGIC_NUMBER, g_pendingSignals[i].signal, request);
+                  // Obter ticket da última ordem executada
+                  ulong lastTicket = 0;
+                  for (int j = OrdersTotal() - 1; j >= 0; j--)
+                  {
+                     ulong ticket = OrderGetTicket(j);
+                     if (ticket > 0 && OrderGetInteger(ORDER_MAGIC) == MAGIC_NUMBER)
+                     {
+                        lastTicket = ticket;
+                        break;
+                     }
+                  }
+
+                  // Se não encontrou em ordens pendentes, procurar em posições
+                  if (lastTicket == 0)
+                  {
+                     for (int j = PositionsTotal() - 1; j >= 0; j--)
+                     {
+                        ulong ticket = PositionGetTicket(j);
+                        if (ticket > 0 && PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER)
+                        {
+                           lastTicket = ticket;
+                           break;
+                        }
+                     }
+                  }
+
+                  if (lastTicket > 0)
+                  {
+                     g_jsonLogger.AddOrder(lastTicket, g_pendingSignals[i].signal, request);
+                  }
                }
             }
          }
@@ -1046,21 +1110,25 @@ void OnBookEvent(const string &symbol)
    }
 }
 //+------------------------------------------------------------------+
- 
+
 //+------------------------------------------------------------------+
 //| Adicionar função para atualizar ordens no JSON                   |
 //+------------------------------------------------------------------+
 void UpdateJSONOrders()
 {
-   if(g_jsonLogger == NULL) return;
-   
+   if (g_jsonLogger == NULL)
+      return;
+
    // Percorrer todas as posições abertas
-   for(int i = PositionsTotal() - 1; i >= 0; i--) {
-      if(PositionGetSymbol(i) != "") {
+   for (int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      if (PositionGetSymbol(i) != "")
+      {
          ulong ticket = PositionGetTicket(i);
-         
+
          // Verificar se é uma posição do nosso EA
-         if(PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER) {
+         if (PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER)
+         {
             // Atualizar dados da ordem
             g_jsonLogger.UpdateOrder(ticket);
          }

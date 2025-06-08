@@ -133,11 +133,6 @@
 #define COLOR_INFO                  clrCyan
 
 
-
-// ❌ PROBLEMA: Valores muito baixos para stops
-// WIN (Mini Índice Bovespa) - Valores em pontos - CORRIGIDO
-// AJUSTES RECOMENDADOS BASEADOS NA ANÁLISE DO BACKTEST
-
 // STOPS - Aumentados para reduzir exits prematuros
 #define WIN_SPIKE_MAX_STOP          1200  // Stop máximo durante spike (era 800)
 #define WIN_CHANNEL_MAX_STOP        1000  // Stop máximo durante canal (era 800)

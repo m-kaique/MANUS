@@ -12,6 +12,7 @@
 #include <Trade/Trade.mqh>
 #include "Structures.mqh"
 #include "Logger.mqh"
+#include "JsonLog.mqh"
 #include "Constants.mqh"
 
 // Constantes de erro definidas como macros
@@ -36,6 +37,8 @@ private:
    // Objetos internos
    CTrade *m_trade;
    CLogger *m_logger;
+   CJSONLogger *m_jsonlog;
+
 
    // Configurações
    bool m_tradeAllowed;
@@ -112,6 +115,8 @@ public:
    CTradeExecutor();
    ~CTradeExecutor();
 
+   bool Initialize(CLogger *logger, CJSONLogger *jsonlog);
+
    // Métodos de inicialização
    bool Initialize(CLogger *logger);
 
@@ -154,6 +159,7 @@ CTradeExecutor::CTradeExecutor()
 {
    m_trade = NULL;
    m_logger = NULL;
+   m_jsonlog = NULL;
    m_tradeAllowed = true;
    m_maxRetries = 3;
    m_retryDelay = 1000; // 1 segundo
@@ -176,7 +182,7 @@ CTradeExecutor::~CTradeExecutor()
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger *logger)
+bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog)
 {
    // Verificar parâmetros
    if (logger == NULL)
@@ -189,6 +195,8 @@ bool CTradeExecutor::Initialize(CLogger *logger)
    m_logger = logger;
    m_logger.Info("Inicializando TradeExecutor");
 
+   // Atribuit jsonlogger
+   m_jsonlog = jsonlog;
    // Criar objeto de trade
    m_trade = new CTrade();
    if (m_trade == NULL)
@@ -207,124 +215,6 @@ bool CTradeExecutor::Initialize(CLogger *logger)
    return true;
 }
 
-//+------------------------------------------------------------------+
-//| Execução de ordem                                                |
-//+------------------------------------------------------------------+
-// bool CTradeExecutor::Execute(OrderRequest &request)
-// {
-
-//    //////////////////////////////////////////////////////
-//    // 1. Verificações básicas
-//    // 2. ✅ NOVO: ValidateAndAdjustStops
-//    // 3. Log da ordem
-//    // 4. Loop de retry
-//    // 5. Execução com valores validados
-//    // 6. Tratamento de erros
-//    //////////////////////////////////////////////////////
-
-//    if (!m_tradeAllowed)
-//    {
-//       m_lastError = -1;
-//       m_lastErrorDesc = "Trading não está habilitado";
-//       m_logger.Warning(m_lastErrorDesc);
-//       return false;
-//    }
-
-//    // Verificar parâmetros
-//    if (request.symbol == "" || request.volume <= 0)
-//    {
-//       m_lastError = -2;
-//       m_lastErrorDesc = "Parâmetros de ordem inválidos";
-//       m_logger.Error(m_lastErrorDesc);
-//       return false;
-//    }
-
-//    // Registrar detalhes da ordem
-//    m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
-//                               request.symbol,
-//                               request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
-//                               request.volume,
-//                               request.price,
-//                               request.stopLoss,
-//                               request.takeProfit));
-
-//    // Executar ordem com retry
-//    bool result = false;
-//    int retries = 0;
-
-//    while (retries < m_maxRetries && !result)
-//    {
-//       if (retries > 0)
-//       {
-//          m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-//          Sleep(m_retryDelay);
-//       }
-
-//       // Executar ordem de acordo com o tipo
-//       switch (request.type)
-//       {
-//       case ORDER_TYPE_BUY:
-//          result = m_trade.Buy(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
-//          break;
-//       case ORDER_TYPE_SELL:
-//          result = m_trade.Sell(request.volume, request.symbol, request.price, request.stopLoss, request.takeProfit, request.comment);
-//          break;
-//       case ORDER_TYPE_BUY_LIMIT:
-//          result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-//          break;
-//       case ORDER_TYPE_SELL_LIMIT:
-//          result = m_trade.SellLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-//          break;
-//       case ORDER_TYPE_BUY_STOP:
-//          result = m_trade.BuyStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-//          break;
-//       case ORDER_TYPE_SELL_STOP:
-//          result = m_trade.SellStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-//          break;
-//       default:
-//          m_lastError = -3;
-//          m_lastErrorDesc = "Tipo de ordem não suportado";
-//          m_logger.Error(m_lastErrorDesc);
-//          return false;
-//       }
-
-//       // Verificar resultado
-//       if (!result)
-//       {
-//          m_lastError = (int)m_trade.ResultRetcode();
-//          m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
-
-//          // Verificar se o erro é recuperável
-//          if (!IsRetryableError(m_lastError))
-//          {
-//             m_logger.Error(m_lastErrorDesc);
-//             return false;
-//          }
-//       }
-
-//       retries++;
-//    }
-
-//    // Verificar resultado final
-//    if (result)
-//    {
-//       ulong ticket = m_trade.ResultOrder();
-//       m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", ticket));
-
-//       // CONFIGURAR BREAKEVEN AUTOMATICAMENTE
-//       if (ticket > 0)
-//       {
-//          AutoConfigureBreakeven(ticket, request.symbol);
-//       }
-
-//       return true;
-//    }
-//    else
-//    {
-//       m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
-//       return false;
-//    }
-// }
 bool CTradeExecutor::Execute(OrderRequest &request)
 {
    // Verificar se trading está permitido
@@ -349,14 +239,15 @@ bool CTradeExecutor::Execute(OrderRequest &request)
    double adjustedEntry = request.price;
    double adjustedSL = request.stopLoss;
    double adjustedTP = request.takeProfit;
-   
-   if(!ValidateAndAdjustStops(request.symbol, request.type, adjustedEntry, adjustedSL, adjustedTP)) {
+
+   if (!ValidateAndAdjustStops(request.symbol, request.type, adjustedEntry, adjustedSL, adjustedTP))
+   {
       m_lastError = -4;
       m_lastErrorDesc = "Falha na validação dos stops";
       m_logger.Error(m_lastErrorDesc);
       return false;
    }
-   
+
    // Atualizar valores no request
    request.price = adjustedEntry;
    request.stopLoss = adjustedSL;
@@ -381,9 +272,10 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       {
          m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
          Sleep(m_retryDelay);
-         
+
          // ✅ Re-validar stops a cada tentativa (preços podem ter mudado)
-         if(!ValidateAndAdjustStops(request.symbol, request.type, request.price, request.stopLoss, request.takeProfit)) {
+         if (!ValidateAndAdjustStops(request.symbol, request.type, request.price, request.stopLoss, request.takeProfit))
+         {
             m_logger.Error("Falha na re-validação dos stops");
             return false;
          }
@@ -391,7 +283,8 @@ bool CTradeExecutor::Execute(OrderRequest &request)
 
       // ✅ Para ordens de mercado, usar preço 0 (execução ao melhor preço disponível)
       double executionPrice = request.price;
-      if(request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL) {
+      if (request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL)
+      {
          executionPrice = 0; // Deixar o MT5 usar o preço de mercado atual
       }
 
@@ -430,11 +323,12 @@ bool CTradeExecutor::Execute(OrderRequest &request)
          m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
 
          // ✅ Log detalhado do erro
-         if(m_logger != NULL) {
-            m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s", 
-                                      m_lastErrorDesc, 
-                                      m_lastError,
-                                      m_trade.ResultRetcodeDescription()));
+         if (m_logger != NULL)
+         {
+            m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s",
+                                        m_lastErrorDesc,
+                                        m_lastError,
+                                        m_trade.ResultRetcodeDescription()));
          }
 
          // Verificar se o erro é recuperável
@@ -589,6 +483,14 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
    if (result)
    {
       m_logger.Info(StringFormat("Posição #%d fechada com sucesso", ticket));
+
+      // add to json
+      double close_price = HistoryDealGetDouble(ticket, DEAL_PRICE);
+      double profit      = HistoryDealGetDouble(ticket, DEAL_PROFIT);  
+      string reason = HistoryDealGetString(ticket, DEAL_COMMENT);
+      //
+      m_jsonlog.CloseOrder(ticket, close_price, profit, reason);
+
       return true;
    }
    else
@@ -2212,7 +2114,7 @@ bool CTradeExecutor::AutoConfigureBreakeven(ulong ticket, string symbol)
    if (StringFind(symbol, "WIN") >= 0)
    {
       // WIN: Breakeven em 100 pontos com offset de 10 pontos
-      return SetBreakevenFixed(ticket, 100.0, 10.0);
+      return SetBreakevenFixed(ticket, 50.0, 10.0);
    }
    else if (StringFind(symbol, "WDO") >= 0)
    {
@@ -2273,15 +2175,13 @@ void CTradeExecutor::CleanupBreakevenConfigs()
    }
 }
 
-
-
 //+------------------------------------------------------------------+
 //| Valida e ajusta stops para respeitar regras do broker           |
 //| - Verifica STOPLEVEL mínimo                                      |
 //| - Ajusta stops muito próximos                                    |
 //| - Normaliza preços para tick size                                |
 //| Retorna: true se válido, false se impossível ajustar             |
-//+------------------------------------------------------------------+ 
+//+------------------------------------------------------------------+
 // Novo método para validar e ajustar stops antes da execução
 bool CTradeExecutor::ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE orderType,
                                             double &entryPrice, double &stopLoss, double &takeProfit)
