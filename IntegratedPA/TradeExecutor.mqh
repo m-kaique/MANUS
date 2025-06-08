@@ -12,6 +12,7 @@
 #include <Trade/Trade.mqh>
 #include "Structures.mqh"
 #include "Logger.mqh"
+#include "Constants.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0
@@ -85,6 +86,8 @@ private:
    bool ShouldTriggerBreakeven(int configIndex);
    bool ExecuteBreakeven(int configIndex);
    void CleanupBreakevenConfigs();
+
+   bool IsPositionReadyForTrailing(ulong ticket);
 
    // Métodos para gerenciamento contínuo
    double CalculateNewTrailingStop(int configIndex);
@@ -873,100 +876,77 @@ bool CTradeExecutor::IsRetryableError(int errorCode)
 //+------------------------------------------------------------------+
 //| Calcular stop loss para trailing stop fixo                       |
 //+------------------------------------------------------------------+
-double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoints)
-{
-   // Verificar parâmetros
-   if (ticket <= 0 || fixedPoints <= 0)
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Error("Parâmetros inválidos para cálculo de trailing stop fixo");
-      }
+double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoints) {
+   if(ticket <= 0 || fixedPoints <= 0) {
       return 0.0;
    }
-
-   // Verificar se a posição existe
-   if (!PositionSelectByTicket(ticket))
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Error("Falha ao selecionar posição #" + IntegerToString(ticket));
-      }
+   
+   if(!PositionSelectByTicket(ticket)) {
       return 0.0;
    }
-
-   // Obter informações da posição
-   double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   
+   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    string symbol = PositionGetString(POSITION_SYMBOL);
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-
-   // Verificar se os valores são válidos
-   if (openPrice <= 0 || currentPrice <= 0 || point <= 0)
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Error("Valores inválidos para cálculo de trailing stop fixo");
-      }
+   
+   if(entryPrice <= 0 || currentPrice <= 0 || point <= 0) {
       return 0.0;
    }
-
-   // Calcular distância em pontos
-   double stopDistance = fixedPoints * point;
-
-   // Calcular novo stop loss
+   
+   // ✅ APLICAR MULTIPLICADOR MAIS CONSERVADOR BASEADO NO SÍMBOLO
+   double adjustedPoints = fixedPoints;
+   
+   if(StringFind(symbol, "WIN") >= 0) {
+      adjustedPoints = MathMax(fixedPoints, 200); // Mínimo 200 pontos para WIN
+   }
+   else if(StringFind(symbol, "WDO") >= 0) {
+      adjustedPoints = MathMax(fixedPoints, 10);  // Mínimo 10 pontos para WDO
+   }
+   else if(StringFind(symbol, "BIT") >= 0) {
+      adjustedPoints = MathMax(fixedPoints, 300); // Mínimo 300 USD para BTC
+   }
+   
+   double stopDistance = adjustedPoints * point;
    double newStopLoss = 0.0;
-
-   if (posType == POSITION_TYPE_BUY)
-   {
+   
+   if(posType == POSITION_TYPE_BUY) {
       newStopLoss = currentPrice - stopDistance;
-
-      // Verificar se o preço está em lucro
-      if (currentPrice <= openPrice)
-      {
-         if (m_logger != NULL)
-         {
-            m_logger.Debug("Trailing stop fixo não aplicado: posição de compra não está em lucro");
-         }
+      
+      // ✅ NÃO PERMITIR STOP ABAIXO DA ENTRADA (proteção de capital)
+      newStopLoss = MathMax(newStopLoss, entryPrice - (entryPrice - entryPrice) * 0.05); // Máximo 5% de perda da entrada
+      
+      // Verificar se está em lucro
+      if(currentPrice <= entryPrice) {
          return 0.0;
       }
-   }
-   else if (posType == POSITION_TYPE_SELL)
-   {
+   } 
+   else if(posType == POSITION_TYPE_SELL) {
       newStopLoss = currentPrice + stopDistance;
-
-      // Verificar se o preço está em lucro
-      if (currentPrice >= openPrice)
-      {
-         if (m_logger != NULL)
-         {
-            m_logger.Debug("Trailing stop fixo não aplicado: posição de venda não está em lucro");
-         }
+      
+      // ✅ NÃO PERMITIR STOP ACIMA DA ENTRADA (proteção de capital)
+      newStopLoss = MathMin(newStopLoss, entryPrice + (entryPrice - entryPrice) * 0.05); // Máximo 5% de perda da entrada
+      
+      // Verificar se está em lucro
+      if(currentPrice >= entryPrice) {
          return 0.0;
       }
-   }
-   else
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Error("Tipo de posição inválido para cálculo de trailing stop fixo");
-      }
+   } 
+   else {
       return 0.0;
    }
-
-   // Normalizar o stop loss
+   
    newStopLoss = NormalizeDouble(newStopLoss, digits);
-
-   if (m_logger != NULL)
-   {
-      m_logger.Debug(StringFormat("Trailing stop fixo calculado para posição #%d: %.5f", ticket, newStopLoss));
+   
+   if(m_logger != NULL) {
+      m_logger.Debug(StringFormat("Trailing stop fixo CONSERVADOR calculado para #%d: %.5f (ajustado: %.1f pontos)", 
+                                ticket, newStopLoss, adjustedPoints));
    }
-
+   
    return newStopLoss;
 }
-
 //+------------------------------------------------------------------+
 //| Calcular stop loss para trailing stop baseado em ATR             |
 //+------------------------------------------------------------------+
@@ -1260,43 +1240,96 @@ double CTradeExecutor::CalculateMATrailingStop(string symbol, ENUM_TIMEFRAMES ti
 //+------------------------------------------------------------------+
 //| Gerenciar trailing stops (chamado a cada tick)                   |
 //+------------------------------------------------------------------+
-void CTradeExecutor::ManageTrailingStops()
-{
+void CTradeExecutor::ManageTrailingStops() {
    int size = ArraySize(m_trailingConfigs);
-   if (size == 0)
-      return;
-
-   for (int i = size - 1; i >= 0; i--)
-   {
+   if(size == 0) return;
+   
+   // ✅ CONTROLE DE TEMPO - NÃO ATUALIZAR A CADA TICK
+   static datetime lastTrailingUpdate = 0;
+   datetime currentTime = TimeCurrent();
+   
+   if(currentTime - lastTrailingUpdate < TRAILING_UPDATE_INTERVAL) {
+      return; // Só atualizar a cada 30 segundos
+   }
+   lastTrailingUpdate = currentTime;
+   
+   for(int i = size - 1; i >= 0; i--) {
       // Verificar se a posição ainda existe
-      if (!PositionSelectByTicket(m_trailingConfigs[i].ticket))
-      {
-         // Remover configuração se posição não existe
+      if(!PositionSelectByTicket(m_trailingConfigs[i].ticket)) {
          RemoveTrailingConfig(i);
          size--;
          continue;
       }
-
-      // ✅ CALCULAR NOVO STOP A CADA TICK (não esperar 10 segundos)
+      
+      // ✅ VERIFICAR SE A POSIÇÃO ESTÁ EM LUCRO SUFICIENTE
+      if(!IsPositionReadyForTrailing(m_trailingConfigs[i].ticket)) {
+         continue;
+      }
+      
+      // Calcular novo stop loss
       double newStopLoss = CalculateNewTrailingStop(i);
-
-      if (newStopLoss > 0 && ShouldUpdateStopLoss(i, newStopLoss))
-      {
+      
+      if(newStopLoss > 0 && ShouldUpdateStopLoss(i, newStopLoss)) {
          double takeProfit = PositionGetDouble(POSITION_TP);
-
-         if (ModifyPosition(m_trailingConfigs[i].ticket, newStopLoss, takeProfit))
-         {
+         
+         if(ModifyPosition(m_trailingConfigs[i].ticket, newStopLoss, takeProfit)) {
             m_trailingConfigs[i].lastStopLoss = newStopLoss;
             m_trailingConfigs[i].lastUpdateTime = TimeCurrent();
-
-            if (m_logger != NULL)
-            {
-               m_logger.Info(StringFormat("Trailing stop atualizado para ticket #%d: %.5f",
-                                          m_trailingConfigs[i].ticket, newStopLoss));
+            
+            if(m_logger != NULL) {
+               m_logger.Info(StringFormat("Trailing stop atualizado para ticket #%d: %.5f", 
+                                        m_trailingConfigs[i].ticket, newStopLoss));
             }
          }
       }
    }
+}
+
+
+//+------------------------------------------------------------------+
+//| ✅ NOVA FUNÇÃO: Verificar se posição está pronta para trailing  |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket) {
+   if(!PositionSelectByTicket(ticket)) {
+      return false;
+   }
+   
+   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+   double stopLoss = PositionGetDouble(POSITION_SL);
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   
+   // Calcular lucro atual em pontos
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double profitPoints = 0;
+   
+   if(posType == POSITION_TYPE_BUY) {
+      profitPoints = (currentPrice - entryPrice) / point;
+   } else {
+      profitPoints = (entryPrice - currentPrice) / point;
+   }
+   
+   // ✅ SÓ ATIVAR TRAILING SE HOUVER LUCRO MÍNIMO
+   bool hasMinimumProfit = (profitPoints >= TRAILING_MIN_PROFIT_POINTS);
+   
+   // ✅ VERIFICAR R:R MÍNIMO PARA ATIVAÇÃO
+   bool hasMinimumRR = false;
+   if(stopLoss > 0) {
+      double riskPoints = 0;
+      if(posType == POSITION_TYPE_BUY) {
+         riskPoints = (entryPrice - stopLoss) / point;
+      } else {
+         riskPoints = (stopLoss - entryPrice) / point;
+      }
+      
+      if(riskPoints > 0) {
+         double currentRR = profitPoints / riskPoints;
+         hasMinimumRR = (currentRR >= TRAILING_ACTIVATION_RR);
+      }
+   }
+   
+   return hasMinimumProfit && hasMinimumRR;
 }
 
 //+------------------------------------------------------------------+
@@ -1331,29 +1364,38 @@ double CTradeExecutor::CalculateNewTrailingStop(int configIndex)
 //+------------------------------------------------------------------+
 //| Verificar se stop loss deve ser atualizado                       |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
-{
-   if (configIndex < 0 || configIndex >= ArraySize(m_trailingConfigs))
-   {
+bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss) {
+   if(configIndex < 0 || configIndex >= ArraySize(m_trailingConfigs)) {
       return false;
    }
-
+   
    double currentStopLoss = PositionGetDouble(POSITION_SL);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-
-   // ✅ VERIFICAR SE É MELHORIA SIGNIFICATIVA (evitar modificações desnecessárias)
-   double minImprovement = SymbolInfoDouble(m_trailingConfigs[configIndex].symbol, SYMBOL_POINT) * 5;
-
-   if (posType == POSITION_TYPE_BUY)
-   {
-      return (newStopLoss > currentStopLoss + minImprovement);
+   string symbol = m_trailingConfigs[configIndex].symbol;
+   
+   // ✅ DEFINIR MELHORIA MÍNIMA BASEADA NO SÍMBOLO
+   double minImprovement = 0;
+   
+   if(StringFind(symbol, "WIN") >= 0) {
+      minImprovement = 50; // 50 pontos para WIN
    }
-   else
-   {
+   else if(StringFind(symbol, "WDO") >= 0) {
+      minImprovement = 3;  // 3 pontos para WDO
+   }
+   else if(StringFind(symbol, "BIT") >= 0) {
+      minImprovement = 100; // 100 USD para BTC
+   }
+   else {
+      minImprovement = SymbolInfoDouble(symbol, SYMBOL_POINT) * 20; // 20 pontos padrão
+   }
+   
+   // ✅ VERIFICAR SE HÁ MELHORIA SIGNIFICATIVA
+   if(posType == POSITION_TYPE_BUY) {
+      return (newStopLoss > currentStopLoss + minImprovement);
+   } else {
       return (newStopLoss < currentStopLoss - minImprovement);
    }
 }
-
 //+------------------------------------------------------------------+
 //| Gerenciar parciais (chamado a cada tick)                         |
 //+------------------------------------------------------------------+

@@ -12,6 +12,7 @@
 #include "../Utils.mqh"
 #include "../Logger.mqh"
 #include "../MarketContext.mqh"
+#include "../Constants.mqh"
 
 //+------------------------------------------------------------------+
 //| Enumeração para Tipos de Entrada no Padrão Spike & Channel       |
@@ -110,6 +111,8 @@ public:
 
    // Método para gerar sinal
    Signal GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, SPIKE_CHANNEL_ENTRY_TYPE preferredEntryType);
+   double CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, double entryPrice, double originalStopLoss);
+   double GetMinimumStopDistance(string symbol);
 };
 
 //+------------------------------------------------------------------+
@@ -779,81 +782,55 @@ bool CSpikeAndChannel::FindEntrySetup(string symbol, ENUM_TIMEFRAMES timeframe, 
 //+------------------------------------------------------------------+
 //| Detecta entrada em pullback mínimo                               |
 //+------------------------------------------------------------------+
-bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, int &entryBar, double &entryPrice, double &stopLoss)
-{
-   // Esta entrada é mais comum durante a fase de spike
-
-   // Procurar por uma pequena hesitação (1-2 barras menores)
-   for (int i = pattern.spikeEndBar - 1; i >= MathMax(pattern.channelEndBar, 0); i--)
-   {
+bool CSpikeAndChannel::DetectPullbackMinimo(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, int &entryBar, double &entryPrice, double &stopLoss) {
+   // Código original mantido até a parte do stop loss...
+   
+   for(int i = pattern.spikeEndBar - 1; i >= MathMax(pattern.channelEndBar, 0); i--) {
       bool isHesitation = false;
-
-      if (pattern.isUptrend)
-      {
-         // Em tendência de alta, procurar por barra menor ou doji
-         if (CalculateBarBodyRatio(symbol, timeframe, i) < 0.5 ||
-             iHigh(symbol, timeframe, i) < iHigh(symbol, timeframe, i + 1))
-         {
+      
+      if(pattern.isUptrend) {
+         if(CalculateBarBodyRatio(symbol, timeframe, i) < 0.5 ||
+            iHigh(symbol, timeframe, i) < iHigh(symbol, timeframe, i + 1)) {
+            isHesitation = true;
+         }
+      } else {
+         if(CalculateBarBodyRatio(symbol, timeframe, i) < 0.5 ||
+            iLow(symbol, timeframe, i) > iLow(symbol, timeframe, i + 1)) {
             isHesitation = true;
          }
       }
-      else
-      {
-         // Em tendência de baixa, procurar por barra menor ou doji
-         if (CalculateBarBodyRatio(symbol, timeframe, i) < 0.5 ||
-             iLow(symbol, timeframe, i) > iLow(symbol, timeframe, i + 1))
-         {
-            isHesitation = true;
-         }
-      }
-
-      if (isHesitation)
-      {
-         // Verificar se a próxima barra retoma o movimento
-         if (i > 0)
-         {
-            if (pattern.isUptrend)
-            {
-               if (iClose(symbol, timeframe, i - 1) > iOpen(symbol, timeframe, i - 1) &&
-                   iClose(symbol, timeframe, i - 1) > iClose(symbol, timeframe, i))
-               {
-                  // Entrada na próxima barra após confirmação
-                  entryBar = i - 1;
-                  entryPrice = iClose(symbol, timeframe, i - 1);
-                  stopLoss = iLow(symbol, timeframe, i) - (iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i)) * 0.1;
-
-                  if (m_logger != NULL)
-                  {
-                     m_logger.Info(StringFormat("SpikeAndChannel: Entrada Pullback Mínimo detectada para %s em barra %d",
-                                                symbol, entryBar));
-                  }
-
-                  return true;
-               }
+      
+      if(isHesitation && i > 0) {
+         if(pattern.isUptrend) {
+            if(iClose(symbol, timeframe, i - 1) > iOpen(symbol, timeframe, i - 1) &&
+               iClose(symbol, timeframe, i - 1) > iClose(symbol, timeframe, i)) {
+               
+               entryBar = i - 1;
+               entryPrice = iClose(symbol, timeframe, i - 1);
+               
+               // ✅ STOP LOSS MAIS CONSERVADOR
+               double barRange = iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i);
+               stopLoss = iLow(symbol, timeframe, i) - barRange * 0.3; // Era 0.1, agora 0.3
+               
+               return true;
             }
-            else
-            {
-               if (iClose(symbol, timeframe, i - 1) < iOpen(symbol, timeframe, i - 1) &&
-                   iClose(symbol, timeframe, i - 1) < iClose(symbol, timeframe, i))
-               {
-                  // Entrada na próxima barra após confirmação
-                  entryBar = i - 1;
-                  entryPrice = iClose(symbol, timeframe, i - 1);
-                  stopLoss = iHigh(symbol, timeframe, i) + (iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i)) * 0.1;
-
-                  if (m_logger != NULL)
-                  {
-                     m_logger.Info(StringFormat("SpikeAndChannel: Entrada Pullback Mínimo detectada para %s em barra %d",
-                                                symbol, entryBar));
-                  }
-
-                  return true;
-               }
+         } else {
+            if(iClose(symbol, timeframe, i - 1) < iOpen(symbol, timeframe, i - 1) &&
+               iClose(symbol, timeframe, i - 1) < iClose(symbol, timeframe, i)) {
+               
+               entryBar = i - 1;
+               entryPrice = iClose(symbol, timeframe, i - 1);
+               
+               // ✅ STOP LOSS MAIS CONSERVADOR
+               double barRange = iHigh(symbol, timeframe, i) - iLow(symbol, timeframe, i);
+               stopLoss = iHigh(symbol, timeframe, i) + barRange * 0.3; // Era 0.1, agora 0.3
+               
+               return true;
             }
          }
       }
    }
-
+   
    return false;
 }
 
@@ -1159,14 +1136,9 @@ bool CSpikeAndChannel::DetectFalhaPullback(string symbol, ENUM_TIMEFRAMES timefr
 //+------------------------------------------------------------------+
 //| Gera sinal com base no padrão detectado                          |
 //+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-// 4. CORREÇÃO NA FUNÇÃO GenerateSignal
-// Problema: R:R muito baixo - ajustar multiplicadores de take profit
-//+------------------------------------------------------------------+
 Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, SPIKE_CHANNEL_ENTRY_TYPE preferredEntryType) {
    Signal signal;
    
-   // Verificar se o padrão é válido
    if(!pattern.isValid) {
       if(m_logger != NULL) {
          m_logger.Warning("SpikeAndChannel: Tentativa de gerar sinal com padrão inválido");
@@ -1198,15 +1170,16 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    
+   // ✅ CALCULAR STOP LOSS MAIS CONSERVADOR
+   double improvedStopLoss = CalculateImprovedStopLoss(symbol, timeframe, pattern, entryPrice, stopLoss);
+   
    // AJUSTAR PREÇOS PARA CONDIÇÕES ATUAIS
    if(pattern.isUptrend) {
-      // Para compras, usar ask como referência
       signal.entryPrice = MathMax(entryPrice, lastTick.ask);
-      signal.stopLoss = MathMax(stopLoss, currentPrice - 100 * point); // Mínimo 100 pontos
+      signal.stopLoss = improvedStopLoss;
    } else {
-      // Para vendas, usar bid como referência  
       signal.entryPrice = MathMin(entryPrice, lastTick.bid);
-      signal.stopLoss = MathMin(stopLoss, currentPrice + 100 * point); // Mínimo 100 pontos
+      signal.stopLoss = improvedStopLoss;
    }
    
    // Normalizar preços
@@ -1222,12 +1195,31 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
       return signal;
    }
    
+   // ✅ VERIFICAR SE O STOP NÃO ESTÁ MUITO PRÓXIMO
+   double stopDistancePoints = MathAbs(signal.entryPrice - signal.stopLoss) / point;
+   double minStopDistance = GetMinimumStopDistance(symbol);
+   
+   if(stopDistancePoints < minStopDistance) {
+      if(m_logger != NULL) {
+         m_logger.Warning(StringFormat("SpikeAndChannel: Stop muito próximo (%.1f pontos), ajustando para mínimo %.1f", 
+                                     stopDistancePoints, minStopDistance));
+      }
+      
+      // Ajustar stop para distância mínima
+      if(pattern.isUptrend) {
+         signal.stopLoss = signal.entryPrice - (minStopDistance * point);
+      } else {
+         signal.stopLoss = signal.entryPrice + (minStopDistance * point);
+      }
+      signal.stopLoss = NormalizeDouble(signal.stopLoss, digits);
+   }
+   
    // Preencher dados do sinal
    signal.id = (int)GetTickCount();
    signal.symbol = symbol;
    signal.direction = pattern.isUptrend ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    signal.marketPhase = PHASE_TREND;
-   signal.quality = SETUP_B; // Será reclassificada depois
+   signal.quality = SETUP_B;
    signal.generatedTime = TimeCurrent();
    signal.strategy = "Spike and Channel";
    signal.isActive = true;
@@ -1253,18 +1245,133 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
    // Calcular relação risco/retorno
    signal.CalculateRiskRewardRatio();
    
-   // Descrição detalhada do sinal
-   signal.description = StringFormat("Spike and Channel (%s) - %s, R:R %.2f, Entrada: %s", 
+   signal.description = StringFormat("Spike and Channel (%s) - %s, R:R %.2f, Stop melhorado", 
                                    pattern.isUptrend ? "Alta" : "Baixa", 
                                    EnumToString(preferredEntryType),
-                                   signal.riskRewardRatio,
-                                   TimeToString(signal.generatedTime));
+                                   signal.riskRewardRatio);
    
    if(m_logger != NULL) {
-      m_logger.Info(StringFormat("SpikeAndChannel: Sinal gerado para %s - %s, Entrada: %.5f, Stop: %.5f, R:R: %.2f", 
+      m_logger.Info(StringFormat("SpikeAndChannel: Sinal gerado para %s - %s, Entrada: %.5f, Stop: %.5f, Distância: %.1f pontos, R:R: %.2f", 
                                symbol, pattern.isUptrend ? "Compra" : "Venda", 
-                               signal.entryPrice, signal.stopLoss, signal.riskRewardRatio));
+                               signal.entryPrice, signal.stopLoss, stopDistancePoints, signal.riskRewardRatio));
    }
    
    return signal;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ NOVA FUNÇÃO: Calcular stop loss melhorado                    |
+//+------------------------------------------------------------------+
+double CSpikeAndChannel::CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, double entryPrice, double originalStopLoss) {
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   
+   // ✅ MÉTODO 1: Usar ATR se disponível
+   double atrValue = 0;
+   int atrHandle = iATR(symbol, timeframe, 14);
+   if(atrHandle != INVALID_HANDLE) {
+      double atrBuffer[];
+      ArraySetAsSeries(atrBuffer, true);
+      if(CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) > 0) {
+         atrValue = atrBuffer[0];
+      }
+      IndicatorRelease(atrHandle);
+   }
+   
+   double improvedStopDistance = 0;
+   
+   if(atrValue > 0) {
+      // ✅ USAR ATR COM MULTIPLICADOR CONSERVADOR
+      double atrMultiplier = 3.0; // Mais conservador que 2.0
+      
+      // Ajustar multiplicador baseado no símbolo
+      if(StringFind(symbol, "WIN") >= 0) {
+         atrMultiplier = 2.5; // WIN é mais volátil
+      }
+      else if(StringFind(symbol, "WDO") >= 0) {
+         atrMultiplier = 3.5; // WDO precisa de mais espaço
+      }
+      else if(StringFind(symbol, "BIT") >= 0) {
+         atrMultiplier = 2.8; // BTC intermediário
+      }
+      
+      improvedStopDistance = atrValue * atrMultiplier;
+      
+      if(m_logger != NULL) {
+         m_logger.Debug(StringFormat("SpikeAndChannel: Stop ATR calculado - ATR: %.2f, Mult: %.1f, Dist: %.2f", 
+                                   atrValue, atrMultiplier, improvedStopDistance));
+      }
+   }
+   else {
+      // ✅ MÉTODO 2: Usar altura do spike como referência
+      double spikeBasedStop = pattern.spikeHeight * 0.5; // 50% da altura do spike
+      
+      // ✅ MÉTODO 3: Usar distância fixa por símbolo
+      double fixedStopDistance = 0;
+      if(StringFind(symbol, "WIN") >= 0) {
+         fixedStopDistance = 400 * point; // 400 pontos para WIN
+      }
+      else if(StringFind(symbol, "WDO") >= 0) {
+         fixedStopDistance = 12 * point;  // 12 pontos para WDO
+      }
+      else if(StringFind(symbol, "BIT") >= 0) {
+         fixedStopDistance = 800 * point; // 800 USD para BTC
+      }
+      else {
+         fixedStopDistance = 100 * point; // 100 pontos padrão
+      }
+      
+      // Usar o maior entre spike-based e fixed
+      improvedStopDistance = MathMax(spikeBasedStop, fixedStopDistance);
+      
+      if(m_logger != NULL) {
+         m_logger.Debug(StringFormat("SpikeAndChannel: Stop fixo calculado - Spike: %.2f, Fixed: %.2f, Escolhido: %.2f", 
+                                   spikeBasedStop, fixedStopDistance, improvedStopDistance));
+      }
+   }
+   
+   // ✅ COMPARAR COM STOP ORIGINAL E USAR O MAIS CONSERVADOR
+   double originalStopDistance = MathAbs(entryPrice - originalStopLoss);
+   double finalStopDistance = MathMax(improvedStopDistance, originalStopDistance);
+   
+   // ✅ APLICAR BUFFER ADICIONAL DE SEGURANÇA
+   finalStopDistance *= 1.2; // +20% buffer
+   
+   // Calcular stop loss final
+   double finalStopLoss = 0;
+   if(pattern.isUptrend) {
+      finalStopLoss = entryPrice - finalStopDistance;
+   } else {
+      finalStopLoss = entryPrice + finalStopDistance;
+   }
+   
+   finalStopLoss = NormalizeDouble(finalStopLoss, digits);
+   
+   if(m_logger != NULL) {
+      double finalStopPoints = finalStopDistance / point;
+      m_logger.Info(StringFormat("SpikeAndChannel: Stop MELHORADO - Original: %.1f pontos, Novo: %.1f pontos (+%.1f%%)", 
+                               originalStopDistance / point, 
+                               finalStopPoints,
+                               ((finalStopDistance - originalStopDistance) / originalStopDistance) * 100));
+   }
+   
+   return finalStopLoss;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ NOVA FUNÇÃO: Obter distância mínima do stop por símbolo      |
+//+------------------------------------------------------------------+
+double CSpikeAndChannel::GetMinimumStopDistance(string symbol) {
+   if(StringFind(symbol, "WIN") >= 0) {
+      return WIN_MIN_STOP_DISTANCE;   // 300 pontos
+   }
+   else if(StringFind(symbol, "WDO") >= 0) {
+      return WDO_MIN_STOP_DISTANCE;   // 10 pontos
+   }
+   else if(StringFind(symbol, "BIT") >= 0) {
+      return BTC_MIN_STOP_DISTANCE;   // 600 USD
+   }
+   else {
+      return 50; // 50 pontos padrão
+   }
 }

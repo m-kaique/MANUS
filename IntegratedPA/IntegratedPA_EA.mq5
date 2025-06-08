@@ -164,27 +164,17 @@ bool IsHistoryAvailable(string symbol, ENUM_TIMEFRAMES timeframe, int minBars = 
 //+------------------------------------------------------------------+
 //| Função para configuração dos ativos                              |
 //+------------------------------------------------------------------+
-bool SetupAssets()
-{
+bool SetupAssets() {
    int assetsCount = 0;
 
    // Redimensionar o array de ativos
-   if (EnableBTC)
-      assetsCount++;
-   if (EnableWDO)
-      assetsCount++;
-   if (EnableWIN)
-      assetsCount++;
+   if(EnableBTC) assetsCount++;
+   if(EnableWDO) assetsCount++;
+   if(EnableWIN) assetsCount++;
 
-   if (assetsCount == 0)
-   {
-      if (g_logger != NULL)
-      {
+   if(assetsCount == 0) {
+      if(g_logger != NULL) {
          g_logger.Error("Nenhum ativo habilitado para operação");
-      }
-      else
-      {
-         Print("Nenhum ativo habilitado para operação");
       }
       return false;
    }
@@ -192,9 +182,8 @@ bool SetupAssets()
    ArrayResize(g_assets, assetsCount);
    int index = 0;
 
-   // Configurar BIT$Dcoin
-   if (EnableBTC)
-   {
+   // ✅ CONFIGURAR BTC COM NOVOS PARÂMETROS
+   if(EnableBTC) {
       g_assets[index].symbol = "BIT$D";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 0.01;
@@ -207,33 +196,25 @@ bool SetupAssets()
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
-      // Configurar níveis de parciais para BTC
-      g_assets[index].partialLevels[0] = 1.0;
-      g_assets[index].partialLevels[1] = 2.0;
-      g_assets[index].partialLevels[2] = 3.0;
+      // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA BTC
+      g_assets[index].partialLevels[0] = 1.5;  // Era 1.0, agora 1.5
+      g_assets[index].partialLevels[1] = 2.5;  // Era 2.0, agora 2.5
+      g_assets[index].partialLevels[2] = 4.0;  // Era 3.0, agora 4.0
 
       g_assets[index].partialVolumes[0] = 0.3;
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.4;
 
-      if (!SymbolSelect("BIT$D", true))
-      {
-         if (g_logger != NULL)
-         {
+      if(!SymbolSelect("BIT$D", true)) {
+         if(g_logger != NULL) {
             g_logger.Warning("Falha ao selecionar símbolo BIT$D");
          }
-         else
-         {
-            Print("Falha ao selecionar símbolo BIT$D");
-         }
       }
-
       index++;
    }
 
-   // Configurar WDO
-   if (EnableWDO)
-   {
+   // ✅ CONFIGURAR WDO COM NOVOS PARÂMETROS
+   if(EnableWDO) {
       g_assets[index].symbol = "WDO$D";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 1.0;
@@ -246,33 +227,25 @@ bool SetupAssets()
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
-      // Configurar níveis de parciais para WDO
-      g_assets[index].partialLevels[0] = 1.0;
-      g_assets[index].partialLevels[1] = 1.5;
-      g_assets[index].partialLevels[2] = 2.0;
+      // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WDO
+      g_assets[index].partialLevels[0] = 2.0;  // Era 1.0, agora 2.0
+      g_assets[index].partialLevels[1] = 3.0;  // Era 1.5, agora 3.0
+      g_assets[index].partialLevels[2] = 4.5;  // Era 2.0, agora 4.5
 
       g_assets[index].partialVolumes[0] = 0.4;
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.3;
 
-      if (!SymbolSelect("WDO$D", true))
-      {
-         if (g_logger != NULL)
-         {
+      if(!SymbolSelect("WDO$D", true)) {
+         if(g_logger != NULL) {
             g_logger.Warning("Falha ao selecionar símbolo WDO");
          }
-         else
-         {
-            Print("Falha ao selecionar símbolo WDO");
-         }
       }
-
       index++;
    }
 
-   // Configurar WIN
-   if (EnableWIN)
-   {
+   // ✅ CONFIGURAR WIN COM NOVOS PARÂMETROS
+   if(EnableWIN) {
       g_assets[index].symbol = "WIN$";
       g_assets[index].enabled = true;
       g_assets[index].minLot = 1.0;
@@ -285,85 +258,82 @@ bool SetupAssets()
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
 
-      // Configurar níveis de parciais para WIN
-      g_assets[index].partialLevels[0] = 1.0;
-      g_assets[index].partialLevels[1] = 1.5;
-      g_assets[index].partialLevels[2] = 2.0;
+      // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WIN
+      g_assets[index].partialLevels[0] = 1.8;  // Era 1.0, agora 1.8
+      g_assets[index].partialLevels[1] = 2.8;  // Era 1.5, agora 2.8
+      g_assets[index].partialLevels[2] = 4.2;  // Era 2.0, agora 4.2
 
       g_assets[index].partialVolumes[0] = 0.5;
       g_assets[index].partialVolumes[1] = 0.3;
       g_assets[index].partialVolumes[2] = 0.2;
 
-      if (!SymbolSelect("WIN$", true))
-      {
-         if (g_logger != NULL)
-         {
+      if(!SymbolSelect("WIN$", true)) {
+         if(g_logger != NULL) {
             g_logger.Warning("Falha ao selecionar símbolo WIN$");
-         }
-         else
-         {
-            Print("Falha ao selecionar símbolo WIN$");
          }
       }
    }
 
    // Verificar disponibilidade de histórico para cada ativo
-   for (int i = 0; i < assetsCount; i++)
-   {
+   for(int i = 0; i < assetsCount; i++) {
       g_assets[i].historyAvailable = IsHistoryAvailable(g_assets[i].symbol, MainTimeframe, g_assets[i].minRequiredBars);
 
-      if (!g_assets[i].historyAvailable)
-      {
-         if (g_logger != NULL)
-         {
+      if(!g_assets[i].historyAvailable) {
+         if(g_logger != NULL) {
             g_logger.Warning("Histórico não disponível para " + g_assets[i].symbol + ", inicialização adiada");
          }
       }
    }
 
-   if (g_logger != NULL)
-   {
-      g_logger.Info(StringFormat("Configurados %d ativos para operação", assetsCount));
-   }
-   else
-   {
-      Print(StringFormat("Configurados %d ativos para operação", assetsCount));
+   if(g_logger != NULL) {
+      g_logger.Info(StringFormat("Configurados %d ativos para operação com parâmetros CONSERVADORES", assetsCount));
    }
 
    return true;
 }
-
 //+------------------------------------------------------------------+
 //| Função para configurar parâmetros de risco para os ativos        |
 //+------------------------------------------------------------------+
-bool ConfigureRiskParameters()
-{
-   if (g_riskManager == NULL)
-   {
-      if (g_logger != NULL)
-      {
+bool ConfigureRiskParameters() {
+   if(g_riskManager == NULL) {
+      if(g_logger != NULL) {
          g_logger.Error("RiskManager não inicializado");
       }
       return false;
    }
 
-   for (int i = 0; i < ArraySize(g_assets); i++)
-   {
+   for(int i = 0; i < ArraySize(g_assets); i++) {
       // Configurar parâmetros de risco específicos para cada ativo
       g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
 
-      // Configurar parciais para cada ativo
-      if (g_assets[i].usePartials)
-      {
-         g_riskManager.ConfigureSymbolPartials(g_assets[i].symbol, true,
-                                               g_assets[i].partialLevels,
-                                               g_assets[i].partialVolumes);
+      // ✅ CONFIGURAR STOPS ESPECÍFICOS POR SÍMBOLO (NOVOS VALORES)
+      if(g_assets[i].symbol == "BIT$D") {
+         // BTC: Stop mais conservador
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, BTC_MIN_STOP_DISTANCE, 2.8);
       }
+      else if(g_assets[i].symbol == "WDO$D") {
+         // WDO: Stop mais conservador  
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, 3.5);
+      }
+      else if(g_assets[i].symbol == "WIN$") {
+         // WIN: Stop mais conservador
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, 2.5);
+      }
+
+      // Configurar parciais para cada ativo
+      if(g_assets[i].usePartials) {
+         g_riskManager.ConfigureSymbolPartials(g_assets[i].symbol, true,
+                                             g_assets[i].partialLevels,
+                                             g_assets[i].partialVolumes);
+      }
+   }
+
+   if(g_logger != NULL) {
+      g_logger.Info("Parâmetros de risco configurados com STOPS CONSERVADORES");
    }
 
    return true;
 }
-
 //+------------------------------------------------------------------+
 //| Função de inicialização do Expert Advisor                        |
 //+------------------------------------------------------------------+

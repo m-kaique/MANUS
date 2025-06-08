@@ -11,30 +11,12 @@
 //+------------------------------------------------------------------+
 //| Constantes Padronizadas - Baseadas no Cap-14 do Guia            |
 //+------------------------------------------------------------------+
-
-//------ Defaults testados (baseados no Cap-14) ------
-#define EMA_FAST_PERIOD         9     // EMA rápida para tendência
-#define EMA_SLOW_PERIOD         21    // EMA lenta para contexto
-#define EMA_CONTEXT_PERIOD      50    // EMA contexto pullbacks
-#define EMA_LONG_PERIOD         200   // EMA longa para bias
-
-#define ATR_PERIOD              14    // Average True Range
-#define MAX_RANGE_ATR           1.2   // Limite de amplitude p/ fase de range
-
 #define STO_PERIOD              14    // Stochastic lento
 #define STO_OVERSOLD            20    // Zona sobrevenda
 #define STO_OVERBOUGHT          80    // Zona sobrecompra
 
 #define VOLUME_PERIOD           20    // Média volume para comparação
 #define VOLUME_THRESHOLD        120   // % mínimo volume para MTR
-
-#define RSI_PERIOD              14    // RSI período padrão
-#define RSI_OVERSOLD            30    // RSI sobrevenda
-#define RSI_OVERBOUGHT          70    // RSI sobrecompra
-
-#define MACD_FAST_PERIOD        12    // MACD EMA rápida
-#define MACD_SLOW_PERIOD        26    // MACD EMA lenta
-#define MACD_SIGNAL_PERIOD      9     // MACD linha de sinal
 
 //------ Constantes para SPIKE AND CHANNEL ------
 #define SPIKE_MIN_BARS          3     // Mínimo de barras para spike
@@ -53,12 +35,6 @@
 #define FIB_LEVEL_500           0.500
 #define FIB_LEVEL_618           0.618  // Golden Zone
 #define FIB_LEVEL_786           0.786
-
-//------ Risk Management Constants ------
-#define DEFAULT_RISK_PERCENT    1.0   // Risco padrão por trade
-#define MAX_DAILY_RISK          3.0   // Risco máximo diário
-#define MAX_POSITION_SIZE       5     // Tamanho máximo de posição
-#define MIN_RISK_REWARD         1.5   // R:R mínimo
 
 //------ Setup Quality Thresholds ------
 #define SETUP_A_PLUS_MIN_FACTORS    3     // Mínimo fatores para A+
@@ -113,29 +89,6 @@
 #define EMAIL_SUBJECT_PREFIX        "[INTEGRATED PA EA]"
 #define ALERT_HISTORY_SIZE          1000
 
-//------ Asset Specific Constants ------
-
-// WIN (Mini Índice Bovespa) - Valores em pontos
-#define WIN_SPIKE_MAX_STOP          200   // Stop máximo durante spike
-#define WIN_CHANNEL_MAX_STOP        150   // Stop máximo durante canal
-#define WIN_FIRST_TARGET            500   // Primeiro alvo
-#define WIN_SECOND_TARGET           1000  // Segundo alvo
-#define WIN_TRAILING_STOP           350   // Trailing stop
-
-// WDO (Mini Dólar) - Valores em pontos
-#define WDO_SPIKE_MAX_STOP          7     // Stop máximo durante spike
-#define WDO_CHANNEL_MAX_STOP        5     // Stop máximo durante canal
-#define WDO_FIRST_TARGET            15    // Primeiro alvo
-#define WDO_SECOND_TARGET           30    // Segundo alvo
-#define WDO_TRAILING_STOP           12    // Trailing stop
-
-// BTC (Bitcoin Futuros) - Valores em USD
-#define BTC_SPIKE_MAX_STOP          700   // Stop máximo durante spike
-#define BTC_CHANNEL_MAX_STOP        500   // Stop máximo durante canal
-#define BTC_FIRST_TARGET            1250  // Primeiro alvo
-#define BTC_SECOND_TARGET           3000  // Segundo alvo
-#define BTC_TRAILING_STOP           900   // Trailing stop
-
 //------ Additional Strategy Constants ------
 
 // TTRD (Trending Trading Range Day)
@@ -176,3 +129,48 @@
 #define COLOR_LOSS                  clrRed
 #define COLOR_WARNING               clrOrange
 #define COLOR_INFO                  clrCyan
+
+
+
+// ❌ PROBLEMA: Valores muito baixos para stops
+// WIN (Mini Índice Bovespa) - Valores em pontos - CORRIGIDO
+#define WIN_SPIKE_MAX_STOP          500   // Stop máximo durante spike (era 200)
+#define WIN_CHANNEL_MAX_STOP        350   // Stop máximo durante canal (era 150)
+#define WIN_FIRST_TARGET            800   // Primeiro alvo (era 500)
+#define WIN_SECOND_TARGET           1500  // Segundo alvo (era 1000)
+#define WIN_TRAILING_STOP           400   // Trailing stop (era 350)
+#define WIN_MIN_STOP_DISTANCE       300   // NOVO: Distância mínima do stop
+
+// WDO (Mini Dólar) - Valores em pontos - CORRIGIDO
+#define WDO_SPIKE_MAX_STOP          15    // Stop máximo durante spike (era 7)
+#define WDO_CHANNEL_MAX_STOP        12    // Stop máximo durante canal (era 5)
+#define WDO_FIRST_TARGET            25    // Primeiro alvo (era 15)
+#define WDO_SECOND_TARGET           45    // Segundo alvo (era 30)
+#define WDO_TRAILING_STOP           18    // Trailing stop (era 12)
+#define WDO_MIN_STOP_DISTANCE       10    // NOVO: Distância mínima do stop
+
+// BTC (Bitcoin Futuros) - Valores em USD - CORRIGIDO
+#define BTC_SPIKE_MAX_STOP          1200  // Stop máximo durante spike (era 700)
+#define BTC_CHANNEL_MAX_STOP        800   // Stop máximo durante canal (era 500)
+#define BTC_FIRST_TARGET            2000  // Primeiro alvo (era 1250)
+#define BTC_SECOND_TARGET           4000  // Segundo alvo (era 3000)
+#define BTC_TRAILING_STOP           1000  // Trailing stop (era 900)
+#define BTC_MIN_STOP_DISTANCE       600   // NOVO: Distância mínima do stop
+
+//------ NOVOS PARÂMETROS DE STOP LOSS MAIS CONSERVADORES ------
+#define DEFAULT_ATR_MULTIPLIER      3.0   // Multiplicador ATR padrão (era 2.0)
+#define MIN_ATR_MULTIPLIER          2.5   // Multiplicador ATR mínimo
+#define MAX_ATR_MULTIPLIER          5.0   // Multiplicador ATR máximo
+
+#define STOP_LOSS_BUFFER_PERCENT    0.2   // Buffer adicional de 20% no stop loss
+#define MIN_STOP_DISTANCE_PERCENT   1.5   // Mínimo 1.5% de distância do preço atual
+
+//------ PARÂMETROS PARA DIFERENTES FASES DE MERCADO ------
+#define TREND_STOP_MULTIPLIER       1.0   // Normal em tendência
+#define RANGE_STOP_MULTIPLIER       0.8   // 20% menor em range
+#define REVERSAL_STOP_MULTIPLIER    1.3   // 30% maior em reversão
+
+//------ CONFIGURAÇÕES DE TRAILING STOP MELHORADAS ------
+#define TRAILING_UPDATE_INTERVAL    30    // Atualizar trailing a cada 30 segundos (não a cada tick)
+#define TRAILING_MIN_PROFIT_POINTS  100   // Mínimo lucro antes de ativar trailing
+#define TRAILING_ACTIVATION_RR      0.8   // Ativar trailing após 0.8:1 R:R

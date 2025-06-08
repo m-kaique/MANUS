@@ -12,6 +12,7 @@
 #include "Structures.mqh"
 #include "Logger.mqh"
 #include "MarketContext.mqh"
+#include "Constants.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para gestão de risco e dimensionamento de posições        |
@@ -503,7 +504,7 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
       }
       return 0;
    }
-   
+
    // Validar preço de mercado atual para comparação
    double marketPrice = 0;
    if(!ValidateMarketPrice(symbol, marketPrice)) {
@@ -513,21 +514,8 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
       return 0;
    }
    
-   // Verificar se o preço de entrada está muito distante do preço de mercado (possível erro)
-   double maxDeviation = 0.05; // 5% de desvio máximo
-   double deviation = MathAbs(entryPrice - marketPrice) / marketPrice;
-   
-   if(deviation > maxDeviation) {
-      if(m_logger != NULL) {
-         m_logger.Warning(StringFormat("RiskManager: Preço de entrada (%.5f) muito distante do preço de mercado (%.5f): %.2f%%", 
-                                     entryPrice, marketPrice, deviation * 100));
-      }
-      // Continuar mesmo assim, mas com aviso
-   }
-   
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
-   
    if(index < 0) {
       if(m_logger != NULL) {
          m_logger.Warning("RiskManager: Símbolo " + symbol + " não encontrado para cálculo de stop loss");
@@ -546,44 +534,80 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
    
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
    
-   // Calcular distância do stop loss
+   // ✅ CÁLCULO MELHORADO DO STOP LOSS
    double stopDistance = 0;
+   double atrValue = 0;
    
-   switch(phase) {
-      case PHASE_TREND:
-         // Em tendência, usar ATR para stop loss
-         if(m_marketContext != NULL) {
-            double atr = CalculateATRValue(symbol, PERIOD_CURRENT, 14);
-            if(atr > 0) {
-               stopDistance = atr * m_symbolParams[index].atrMultiplier;
-            } else {
-               stopDistance = m_symbolParams[index].defaultStopPoints * point;
-            }
-         } else {
-            stopDistance = m_symbolParams[index].defaultStopPoints * point;
-         }
-         break;
-         
-      case PHASE_RANGE:
-         // Em range, usar distância fixa ou suporte/resistência
-         stopDistance = m_symbolParams[index].defaultStopPoints * point * 0.8; // 20% menos em range
-         break;
-         
-      case PHASE_REVERSAL:
-         // Em reversão, usar distância maior
-         stopDistance = m_symbolParams[index].defaultStopPoints * point * 1.2; // 20% mais em reversão
-         break;
-         
-      default:
-         // Caso padrão, usar distância fixa
-         stopDistance = m_symbolParams[index].defaultStopPoints * point;
+   // Sempre tentar obter ATR primeiro
+   if(m_marketContext != NULL) {
+      atrValue = CalculateATRValue(symbol, PERIOD_CURRENT, 14);
    }
    
-   // Garantir distância mínima
-   double minStopDistance = 10 * point; // Mínimo de 10 pontos
+   // Definir multiplicador baseado na fase de mercado
+   double phaseMultiplier = 1.0;
+   switch(phase) {
+      case PHASE_TREND:
+         phaseMultiplier = TREND_STOP_MULTIPLIER;  // 1.0
+         break;
+      case PHASE_RANGE:
+         phaseMultiplier = RANGE_STOP_MULTIPLIER;  // 0.8
+         break;
+      case PHASE_REVERSAL:
+         phaseMultiplier = REVERSAL_STOP_MULTIPLIER; // 1.3
+         break;
+      default:
+         phaseMultiplier = 1.0;
+   }
+   
+   // ✅ MÉTODO 1: Usar ATR se disponível (PREFERIDO)
+   if(atrValue > 0) {
+      double atrMultiplier = m_symbolParams[index].atrMultiplier * phaseMultiplier;
+      
+      // ✅ GARANTIR MULTIPLICADOR MÍNIMO MAIS CONSERVADOR
+      atrMultiplier = MathMax(atrMultiplier, MIN_ATR_MULTIPLIER); // Mínimo 2.5
+      atrMultiplier = MathMin(atrMultiplier, MAX_ATR_MULTIPLIER); // Máximo 5.0
+      
+      stopDistance = atrValue * atrMultiplier;
+      
+      if(m_logger != NULL) {
+         m_logger.Debug(StringFormat("RiskManager: Stop ATR calculado para %s: ATR=%.2f, Mult=%.2f, Dist=%.2f", 
+                                   symbol, atrValue, atrMultiplier, stopDistance));
+      }
+   }
+   // ✅ MÉTODO 2: Usar valores fixos melhorados por símbolo
+   else {
+      double basePoints = m_symbolParams[index].defaultStopPoints * phaseMultiplier;
+      
+      // ✅ APLICAR VALORES MÍNIMOS POR SÍMBOLO
+      if(StringFind(symbol, "WIN") >= 0) {
+         basePoints = MathMax(basePoints, WIN_MIN_STOP_DISTANCE);
+      }
+      else if(StringFind(symbol, "WDO") >= 0) {
+         basePoints = MathMax(basePoints, WDO_MIN_STOP_DISTANCE);
+      }
+      else if(StringFind(symbol, "BIT") >= 0) {
+         basePoints = MathMax(basePoints, BTC_MIN_STOP_DISTANCE);
+      }
+      
+      stopDistance = basePoints * point;
+      
+      if(m_logger != NULL) {
+         m_logger.Debug(StringFormat("RiskManager: Stop fixo calculado para %s: BasePoints=%.1f, Dist=%.2f", 
+                                   symbol, basePoints, stopDistance));
+      }
+   }
+   
+   // ✅ VERIFICAR DISTÂNCIA MÍNIMA BASEADA NO PREÇO ATUAL
+   double minStopDistancePercent = entryPrice * (MIN_STOP_DISTANCE_PERCENT / 100.0);
+   double minStopDistancePoints = 50 * point; // Mínimo absoluto de 50 pontos
+   double minStopDistance = MathMax(minStopDistancePercent, minStopDistancePoints);
+   
    stopDistance = MathMax(stopDistance, minStopDistance);
    
-   // Calcular preço do stop loss
+   // ✅ ADICIONAR BUFFER DE SEGURANÇA
+   stopDistance *= (1.0 + STOP_LOSS_BUFFER_PERCENT); // +20% buffer
+   
+   // ✅ CALCULAR PREÇO FINAL DO STOP LOSS
    double stopLoss = 0;
    
    if(orderType == ORDER_TYPE_BUY) {
@@ -596,7 +620,8 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
          }
          return 0;
       }
-   } else if(orderType == ORDER_TYPE_SELL) {
+   } 
+   else if(orderType == ORDER_TYPE_SELL) {
       stopLoss = entryPrice + stopDistance;
       
       // Verificar se o stop loss está muito próximo do preço atual
@@ -606,7 +631,8 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
          }
          return 0;
       }
-   } else {
+   } 
+   else {
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Tipo de ordem inválido para cálculo de stop loss");
       }
@@ -616,14 +642,20 @@ double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType,
    // Normalizar o preço do stop loss
    stopLoss = NormalizeDouble(stopLoss, digits);
    
+   // ✅ LOG DETALHADO PARA DEBUGGING
    if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("RiskManager: Stop loss calculado para %s: %.5f (distância: %.5f)", 
-                                symbol, stopLoss, stopDistance));
+      double stopDistancePoints = stopDistance / point;
+      m_logger.Info(StringFormat("RiskManager: Stop loss FINAL para %s (%s): Entrada=%.5f, Stop=%.5f, Distância=%.1f pontos, Fase=%s", 
+                               symbol, 
+                               orderType == ORDER_TYPE_BUY ? "COMPRA" : "VENDA",
+                               entryPrice, 
+                               stopLoss, 
+                               stopDistancePoints,
+                               EnumToString(phase)));
    }
    
    return stopLoss;
 }
-
 //+------------------------------------------------------------------+
 //| Calcular take profit baseado no stop loss                        |
 //+------------------------------------------------------------------+
