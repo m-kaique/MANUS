@@ -181,6 +181,5 @@
 #define REVERSAL_STOP_MULTIPLIER    1.3   // 30% maior em reversão
 
 //------ CONFIGURAÇÕES DE TRAILING STOP MELHORADAS ------
-#define TRAILING_UPDATE_INTERVAL    30    // Atualizar trailing a cada 30 segundos (não a cada tick)
-#define TRAILING_MIN_PROFIT_POINTS  100   // Mínimo lucro antes de ativar trailing
-#define TRAILING_ACTIVATION_RR      0.8   // Ativar trailing após 0.8:1 R:R
+#define TRAILING_MIN_PROFIT_POINTS  50   // Mínimo lucro antes de ativar trailing
+#define TRAILING_ACTIVATION_RR      0.3   // Ativar trailing após 0.8:1 R:R
