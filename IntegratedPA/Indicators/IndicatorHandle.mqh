@@ -12,14 +12,14 @@
 //+------------------------------------------------------------------+
 enum INDICATOR_TYPE
 {
-   IND_MA,           // Moving Average
-   IND_EMA,          // Exponential Moving Average
-   IND_RSI,          // Relative Strength Index
-   IND_ATR,          // Average True Range
-   IND_MACD,         // MACD
-   IND_STOCHASTIC,   // Stochastic Oscillator
-   IND_BOLLINGER,    // Bollinger Bands
-   IND_CUSTOM        // Indicador customizado
+   I_IND_MA,           // Moving Average
+   I_IND_EMA,          // Exponential Moving Average
+   I_IND_RSI,          // Relative Strength Index
+   I_IND_ATR,          // Average True Range
+   I_IND_MACD,         // MACD
+   I_IND_STOCHASTIC,   // Stochastic Oscillator
+   I_IND_BOLLINGER,    // Bollinger Bands
+   I_IND_CUSTOM        // Indicador customizado
 };
 
 //+------------------------------------------------------------------+
@@ -46,7 +46,7 @@ struct IndicatorParams
    // Construtor
    IndicatorParams()
    {
-      type = IND_MA;
+      type = I_IND_MA;
       symbol = "";
       timeframe = PERIOD_CURRENT;
       period1 = 14;
@@ -129,7 +129,7 @@ public:
    bool IsValid() const { return m_isValid && m_handle != INVALID_HANDLE; }
    datetime GetLastAccess() const { return m_lastAccess; }
    int GetRefCount() const { return m_refCount; }
-   const IndicatorParams& GetParams() const { return m_params; }
+   const IndicatorParams GetParams() const { return m_params; }
    
    // Gerenciamento de referências
    void AddRef() { m_refCount++; }
@@ -201,34 +201,34 @@ private:
       
       switch(m_params.type)
       {
-         case IND_MA:
-         case IND_EMA:
+         case I_IND_MA:
+         case I_IND_EMA:
             m_handle = iMA(m_params.symbol, m_params.timeframe, m_params.period1, 
                           m_params.shift, m_params.method, m_params.price);
             break;
             
-         case IND_RSI:
+         case I_IND_RSI:
             m_handle = iRSI(m_params.symbol, m_params.timeframe, m_params.period1, m_params.price);
             break;
             
-         case IND_ATR:
+         case I_IND_ATR:
             m_handle = iATR(m_params.symbol, m_params.timeframe, m_params.period1);
             break;
             
-         case IND_MACD:
+         case I_IND_MACD:
             m_handle = iMACD(m_params.symbol, m_params.timeframe, m_params.period1, 
                            m_params.period2, m_params.period3, m_params.price);
             break;
             
-         case IND_STOCHASTIC:
+         case I_IND_STOCHASTIC:
             m_handle = iStochastic(m_params.symbol, m_params.timeframe, m_params.period1, 
                                  m_params.period2, m_params.period3, m_params.method, 
                                  STO_LOWHIGH);
             break;
             
-         case IND_BOLLINGER:
+         case I_IND_BOLLINGER:
             m_handle = iBands(m_params.symbol, m_params.timeframe, m_params.period1, 
-                            m_params.deviation, m_params.shift, m_params.price);
+                            (int)m_params.deviation, m_params.shift, m_params.price);
             break;
             
          default:

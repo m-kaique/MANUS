@@ -9,6 +9,7 @@
 
 #include "Structures.mqh"
 #include "Logger.mqh"
+#include "Indicators/IndicatorHandlePool.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para análise de contexto de mercado                        |
@@ -18,29 +19,8 @@ private:
    string m_symbol;                  // Símbolo atual
    ENUM_TIMEFRAMES m_timeframe;      // Timeframe principal
    CLogger* m_logger;                // Ponteiro para o logger
+   CHandlePool* m_handlePool;        // ← NOVA: Ponteiro para o pool de handles
    MARKET_PHASE m_currentPhase;      // Fase atual do mercado
-   
-   // Handles de indicadores - Mantidos durante toda a vida do objeto
-   int m_ema9Handle;
-   int m_ema21Handle;
-   int m_ema50Handle;
-   int m_ema200Handle;
-   int m_rsiHandle;
-   int m_atrHandle;
-   int m_macdHandle;
-   int m_stochHandle;
-   int m_bollingerHandle;
-   
-   // Handles para timeframes adicionais - Mantidos como arrays
-   int m_ema9Handles[4];   // Um para cada timeframe [principal, maior, intermediário, menor]
-   int m_ema21Handles[4];
-   int m_ema50Handles[4];
-   int m_ema200Handles[4];
-   int m_rsiHandles[4];
-   int m_atrHandles[4];
-   int m_macdHandles[4];
-   int m_stochHandles[4];
-   int m_bollingerHandles[4];
    
    // Timeframes para análise multi-timeframe
    ENUM_TIMEFRAMES m_timeframes[4];  // [principal, maior, intermediário, menor]
@@ -58,14 +38,16 @@ private:
    bool CheckMovingAveragesAlignment(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
    bool CheckMomentum(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
    
-   // Métodos para gerenciamento de handles
-   bool CreateIndicatorHandles();
-   bool CreateTimeframeHandles();
-   void ReleaseIndicatorHandles();
-   int GetIndicatorHandle(int baseHandle, ENUM_TIMEFRAMES timeframe);
-   
    // Método para verificar se há dados suficientes
    bool CheckDataValidity();
+   
+   // Métodos auxiliares para acesso aos indicadores via pool
+   CIndicatorHandle* GetEMAHandle(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
+   CIndicatorHandle* GetRSIHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
+   CIndicatorHandle* GetATRHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
+   CIndicatorHandle* GetMACDHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
+   CIndicatorHandle* GetStochasticHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
+   CIndicatorHandle* GetBollingerHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT);
 
 public:
    // Construtor e destrutor
@@ -73,7 +55,7 @@ public:
    ~CMarketContext();
    
    // Métodos públicos
-   bool Initialize(string symbol, ENUM_TIMEFRAMES timeframe, CLogger* logger = NULL, bool checkHistory = true);
+   bool Initialize(string symbol, ENUM_TIMEFRAMES timeframe, CHandlePool* handlePool, CLogger* logger = NULL, bool checkHistory = true);
    bool UpdateSymbol(string symbol);
    MARKET_PHASE DetectPhase();
    MARKET_PHASE DetermineMarketPhase();
@@ -109,53 +91,38 @@ CMarketContext::CMarketContext() {
    m_symbol = "";
    m_timeframe = PERIOD_CURRENT;
    m_logger = NULL;
+   m_handlePool = NULL;
    m_currentPhase = PHASE_UNDEFINED;
    m_hasValidData = false;
    m_minRequiredBars = 100;
-   
-   // Inicializar handles como inválidos
-   m_ema9Handle = INVALID_HANDLE;
-   m_ema21Handle = INVALID_HANDLE;
-   m_ema50Handle = INVALID_HANDLE;
-   m_ema200Handle = INVALID_HANDLE;
-   m_rsiHandle = INVALID_HANDLE;
-   m_atrHandle = INVALID_HANDLE;
-   m_macdHandle = INVALID_HANDLE;
-   m_stochHandle = INVALID_HANDLE;
-   m_bollingerHandle = INVALID_HANDLE;
-   
-   // Inicializar arrays de handles
-   ArrayInitialize(m_ema9Handles, INVALID_HANDLE);
-   ArrayInitialize(m_ema21Handles, INVALID_HANDLE);
-   ArrayInitialize(m_ema50Handles, INVALID_HANDLE);
-   ArrayInitialize(m_ema200Handles, INVALID_HANDLE);
-   ArrayInitialize(m_rsiHandles, INVALID_HANDLE);
-   ArrayInitialize(m_atrHandles, INVALID_HANDLE);
-   ArrayInitialize(m_macdHandles, INVALID_HANDLE);
-   ArrayInitialize(m_stochHandles, INVALID_HANDLE);
-   ArrayInitialize(m_bollingerHandles, INVALID_HANDLE);
 }
 
 //+------------------------------------------------------------------+
 //| Destrutor                                                        |
 //+------------------------------------------------------------------+
 CMarketContext::~CMarketContext() {
-   ReleaseIndicatorHandles();
+   // O pool de handles é gerenciado externamente, não precisamos liberar aqui
 }
 
 //+------------------------------------------------------------------+
 //| Inicialização do contexto de mercado                             |
 //+------------------------------------------------------------------+
-bool CMarketContext::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, CLogger* logger = NULL, bool checkHistory = true) {
-   // Liberar handles existentes
-   ReleaseIndicatorHandles();
-   
+bool CMarketContext::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, CHandlePool* handlePool, CLogger* logger = NULL, bool checkHistory = true) {
    // Configurar parâmetros básicos
    m_symbol = symbol;
    m_timeframe = timeframe;
+   m_handlePool = handlePool;
    m_logger = logger;
    m_currentPhase = PHASE_UNDEFINED;
    m_hasValidData = false;
+   
+   // Verificar se o pool de handles foi fornecido
+   if(m_handlePool == NULL) {
+      if(m_logger != NULL) {
+         m_logger.Error("Pool de handles não fornecido para " + m_symbol);
+      }
+      return false;
+   }
    
    // Configurar timeframes para análise multi-timeframe
    m_timeframes[0] = timeframe;                                // Principal
@@ -173,21 +140,6 @@ bool CMarketContext::Initialize(string symbol, ENUM_TIMEFRAMES timeframe, CLogge
                            " barras (mínimo: " + IntegerToString(m_minRequiredBars) + ")");
          }
          return true; // Continuar sem criar handles
-      }
-   }
-   
-   // Criar handles de indicadores
-   if(!CreateIndicatorHandles()) {
-      if(m_logger != NULL) {
-         m_logger.Warning("Falha ao criar handles de indicadores para " + m_symbol);
-      }
-      return true; // Continuar mesmo sem handles
-   }
-   
-   // Criar handles para timeframes adicionais
-   if(!CreateTimeframeHandles()) {
-      if(m_logger != NULL) {
-         m_logger.Warning("Falha ao criar handles para timeframes adicionais para " + m_symbol);
       }
    }
    
@@ -213,27 +165,14 @@ bool CMarketContext::UpdateSymbol(string symbol) {
       m_logger.Info("Atualizando contexto de mercado para símbolo: " + symbol);
    }
    
-   // Liberar handles existentes
-   ReleaseIndicatorHandles();
+   // Invalidar cache do pool para o símbolo anterior
+   if(m_handlePool != NULL) {
+      m_handlePool.InvalidateCache(m_symbol);
+   }
    
    // Atualizar símbolo
    m_symbol = symbol;
    m_hasValidData = false;
-   
-   // Criar novos handles
-   if(!CreateIndicatorHandles()) {
-      if(m_logger != NULL) {
-         m_logger.Warning("Falha ao criar handles de indicadores para " + m_symbol);
-      }
-      return false;
-   }
-   
-   // Criar handles para timeframes adicionais
-   if(!CreateTimeframeHandles()) {
-      if(m_logger != NULL) {
-         m_logger.Warning("Falha ao criar handles para timeframes adicionais para " + m_symbol);
-      }
-   }
    
    // Verificar se há dados suficientes
    m_hasValidData = CheckDataValidity();
@@ -293,158 +232,48 @@ bool CMarketContext::UpdateMarketDepth(string symbol) {
 }
 
 //+------------------------------------------------------------------+
-//| Criar handles de indicadores                                     |
+//| Métodos auxiliares para acesso aos indicadores via pool          |
 //+------------------------------------------------------------------+
-bool CMarketContext::CreateIndicatorHandles() {
-   // Liberar handles existentes primeiro
-   ReleaseIndicatorHandles();
+CIndicatorHandle* CMarketContext::GetEMAHandle(int period, ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+   if(m_handlePool == NULL) return NULL;
    
-   // Verificar se há barras suficientes
-   int bars = (int)SeriesInfoInteger(m_symbol, m_timeframe, SERIES_BARS_COUNT);
-   if(bars < m_minRequiredBars) {
-      if(m_logger != NULL) {
-         m_logger.Warning("Histórico insuficiente para " + m_symbol + ", handles não serão criados agora");
-      }
-      return false;
-   }
-   
-   // Criar handles para o timeframe principal
-   m_ema9Handle = iMA(m_symbol, m_timeframe, 9, 0, MODE_EMA, PRICE_CLOSE);
-   m_ema21Handle = iMA(m_symbol, m_timeframe, 21, 0, MODE_EMA, PRICE_CLOSE);
-   m_ema50Handle = iMA(m_symbol, m_timeframe, 50, 0, MODE_EMA, PRICE_CLOSE);
-   m_ema200Handle = iMA(m_symbol, m_timeframe, 200, 0, MODE_EMA, PRICE_CLOSE);
-   m_rsiHandle = iRSI(m_symbol, m_timeframe, 14, PRICE_CLOSE);
-   m_atrHandle = iATR(m_symbol, m_timeframe, 14);
-   m_macdHandle = iMACD(m_symbol, m_timeframe, 12, 26, 9, PRICE_CLOSE);
-   m_stochHandle = iStochastic(m_symbol, m_timeframe, 5, 3, 3, MODE_SMA, STO_LOWHIGH);
-   m_bollingerHandle = iBands(m_symbol, m_timeframe, 20, 2, 0, PRICE_CLOSE);
-   
-   // Verificar se todos os handles foram criados com sucesso
-   bool allHandlesValid = (m_ema9Handle != INVALID_HANDLE && 
-                          m_ema21Handle != INVALID_HANDLE && 
-                          m_ema50Handle != INVALID_HANDLE && 
-                          m_ema200Handle != INVALID_HANDLE && 
-                          m_rsiHandle != INVALID_HANDLE && 
-                          m_atrHandle != INVALID_HANDLE && 
-                          m_macdHandle != INVALID_HANDLE && 
-                          m_stochHandle != INVALID_HANDLE && 
-                          m_bollingerHandle != INVALID_HANDLE);
-   
-   if(!allHandlesValid && m_logger != NULL) {
-      m_logger.Error("Falha ao criar um ou mais handles de indicadores para " + m_symbol);
-   }
-   
-   return allHandlesValid;
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
+   return m_handlePool.GetEMA(m_symbol, tf, period, 0, PRICE_CLOSE);
 }
 
-//+------------------------------------------------------------------+
-//| Criar handles para timeframes adicionais                         |
-//+------------------------------------------------------------------+
-bool CMarketContext::CreateTimeframeHandles() {
-   bool allHandlesValid = true;
+CIndicatorHandle* CMarketContext::GetRSIHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+   if(m_handlePool == NULL) return NULL;
    
-   // Criar handles para cada timeframe adicional
-   for(int i = 1; i < 4; i++) {  // Começar de 1 pois 0 é o timeframe principal
-      ENUM_TIMEFRAMES tf = m_timeframes[i];
-      
-      // Verificar se há barras suficientes
-      int bars = (int)SeriesInfoInteger(m_symbol, tf, SERIES_BARS_COUNT);
-      if(bars < m_minRequiredBars) {
-         if(m_logger != NULL) {
-            m_logger.Warning("Histórico insuficiente para " + m_symbol + " em " + 
-                           EnumToString(tf) + ", handles não serão criados");
-         }
-         continue;
-      }
-      
-      // Criar handles
-      m_ema9Handles[i] = iMA(m_symbol, tf, 9, 0, MODE_EMA, PRICE_CLOSE);
-      m_ema21Handles[i] = iMA(m_symbol, tf, 21, 0, MODE_EMA, PRICE_CLOSE);
-      m_ema50Handles[i] = iMA(m_symbol, tf, 50, 0, MODE_EMA, PRICE_CLOSE);
-      m_ema200Handles[i] = iMA(m_symbol, tf, 200, 0, MODE_EMA, PRICE_CLOSE);
-      m_rsiHandles[i] = iRSI(m_symbol, tf, 14, PRICE_CLOSE);
-      m_atrHandles[i] = iATR(m_symbol, tf, 14);
-      m_macdHandles[i] = iMACD(m_symbol, tf, 12, 26, 9, PRICE_CLOSE);
-      m_stochHandles[i] = iStochastic(m_symbol, tf, 5, 3, 3, MODE_SMA, STO_LOWHIGH);
-      m_bollingerHandles[i] = iBands(m_symbol, tf, 20, 2, 0, PRICE_CLOSE);
-      
-      // Verificar se todos os handles foram criados com sucesso
-      bool tfHandlesValid = (m_ema9Handles[i] != INVALID_HANDLE && 
-                            m_ema21Handles[i] != INVALID_HANDLE && 
-                            m_ema50Handles[i] != INVALID_HANDLE && 
-                            m_ema200Handles[i] != INVALID_HANDLE && 
-                            m_rsiHandles[i] != INVALID_HANDLE && 
-                            m_atrHandles[i] != INVALID_HANDLE && 
-                            m_macdHandles[i] != INVALID_HANDLE && 
-                            m_stochHandles[i] != INVALID_HANDLE && 
-                            m_bollingerHandles[i] != INVALID_HANDLE);
-      
-      if(!tfHandlesValid && m_logger != NULL) {
-         m_logger.Warning("Falha ao criar um ou mais handles para " + m_symbol + " em " + EnumToString(tf));
-      }
-      
-      allHandlesValid = allHandlesValid && tfHandlesValid;
-   }
-   
-   return allHandlesValid;
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
+   return m_handlePool.GetRSI(m_symbol, tf, 14, PRICE_CLOSE);
 }
 
-//+------------------------------------------------------------------+
-//| Liberar handles de indicadores                                   |
-//+------------------------------------------------------------------+
-void CMarketContext::ReleaseIndicatorHandles() {
-   // Liberar handles do timeframe principal
-   if(m_ema9Handle != INVALID_HANDLE) { IndicatorRelease(m_ema9Handle); m_ema9Handle = INVALID_HANDLE; }
-   if(m_ema21Handle != INVALID_HANDLE) { IndicatorRelease(m_ema21Handle); m_ema21Handle = INVALID_HANDLE; }
-   if(m_ema50Handle != INVALID_HANDLE) { IndicatorRelease(m_ema50Handle); m_ema50Handle = INVALID_HANDLE; }
-   if(m_ema200Handle != INVALID_HANDLE) { IndicatorRelease(m_ema200Handle); m_ema200Handle = INVALID_HANDLE; }
-   if(m_rsiHandle != INVALID_HANDLE) { IndicatorRelease(m_rsiHandle); m_rsiHandle = INVALID_HANDLE; }
-   if(m_atrHandle != INVALID_HANDLE) { IndicatorRelease(m_atrHandle); m_atrHandle = INVALID_HANDLE; }
-   if(m_macdHandle != INVALID_HANDLE) { IndicatorRelease(m_macdHandle); m_macdHandle = INVALID_HANDLE; }
-   if(m_stochHandle != INVALID_HANDLE) { IndicatorRelease(m_stochHandle); m_stochHandle = INVALID_HANDLE; }
-   if(m_bollingerHandle != INVALID_HANDLE) { IndicatorRelease(m_bollingerHandle); m_bollingerHandle = INVALID_HANDLE; }
+CIndicatorHandle* CMarketContext::GetATRHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+   if(m_handlePool == NULL) return NULL;
    
-   // Liberar handles dos timeframes adicionais
-   for(int i = 1; i < 4; i++) {
-      if(m_ema9Handles[i] != INVALID_HANDLE) { IndicatorRelease(m_ema9Handles[i]); m_ema9Handles[i] = INVALID_HANDLE; }
-      if(m_ema21Handles[i] != INVALID_HANDLE) { IndicatorRelease(m_ema21Handles[i]); m_ema21Handles[i] = INVALID_HANDLE; }
-      if(m_ema50Handles[i] != INVALID_HANDLE) { IndicatorRelease(m_ema50Handles[i]); m_ema50Handles[i] = INVALID_HANDLE; }
-      if(m_ema200Handles[i] != INVALID_HANDLE) { IndicatorRelease(m_ema200Handles[i]); m_ema200Handles[i] = INVALID_HANDLE; }
-      if(m_rsiHandles[i] != INVALID_HANDLE) { IndicatorRelease(m_rsiHandles[i]); m_rsiHandles[i] = INVALID_HANDLE; }
-      if(m_atrHandles[i] != INVALID_HANDLE) { IndicatorRelease(m_atrHandles[i]); m_atrHandles[i] = INVALID_HANDLE; }
-      if(m_macdHandles[i] != INVALID_HANDLE) { IndicatorRelease(m_macdHandles[i]); m_macdHandles[i] = INVALID_HANDLE; }
-      if(m_stochHandles[i] != INVALID_HANDLE) { IndicatorRelease(m_stochHandles[i]); m_stochHandles[i] = INVALID_HANDLE; }
-      if(m_bollingerHandles[i] != INVALID_HANDLE) { IndicatorRelease(m_bollingerHandles[i]); m_bollingerHandles[i] = INVALID_HANDLE; }
-   }
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
+   return m_handlePool.GetATR(m_symbol, tf, 14);
 }
 
-//+------------------------------------------------------------------+
-//| Obter handle de indicador para o timeframe especificado          |
-//+------------------------------------------------------------------+
-int CMarketContext::GetIndicatorHandle(int baseHandle, ENUM_TIMEFRAMES timeframe) {
-   // Se o timeframe for o principal, retornar o handle base
-   if(timeframe == m_timeframe || timeframe == PERIOD_CURRENT) {
-      return baseHandle;
-   }
+CIndicatorHandle* CMarketContext::GetMACDHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+   if(m_handlePool == NULL) return NULL;
    
-   // Caso contrário, encontrar o índice do timeframe
-   for(int i = 0; i < 4; i++) {
-      if(m_timeframes[i] == timeframe) {
-         // Determinar qual array de handles usar
-         if(baseHandle == m_ema9Handle) return m_ema9Handles[i];
-         if(baseHandle == m_ema21Handle) return m_ema21Handles[i];
-         if(baseHandle == m_ema50Handle) return m_ema50Handles[i];
-         if(baseHandle == m_ema200Handle) return m_ema200Handles[i];
-         if(baseHandle == m_rsiHandle) return m_rsiHandles[i];
-         if(baseHandle == m_atrHandle) return m_atrHandles[i];
-         if(baseHandle == m_macdHandle) return m_macdHandles[i];
-         if(baseHandle == m_stochHandle) return m_stochHandles[i];
-         if(baseHandle == m_bollingerHandle) return m_bollingerHandles[i];
-      }
-   }
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
+   return m_handlePool.GetMACD(m_symbol, tf, 12, 26, 9, PRICE_CLOSE);
+}
+
+CIndicatorHandle* CMarketContext::GetStochasticHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+   if(m_handlePool == NULL) return NULL;
    
-   // Se não encontrar, retornar handle inválido
-   return INVALID_HANDLE;
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
+   return m_handlePool.GetStochastic(m_symbol, tf, 5, 3, 3, MODE_SMA);
+}
+
+CIndicatorHandle* CMarketContext::GetBollingerHandle(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
+   if(m_handlePool == NULL) return NULL;
+   
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
+   return m_handlePool.GetBollinger(m_symbol, tf, 20, 2.0, 0, PRICE_CLOSE);
 }
 
 //+------------------------------------------------------------------+
@@ -462,21 +291,26 @@ bool CMarketContext::CheckDataValidity() {
       return false;
    }
    
-   // Verificar se os handles são válidos
-   if(m_ema9Handle == INVALID_HANDLE || m_ema21Handle == INVALID_HANDLE || 
-      m_ema50Handle == INVALID_HANDLE || m_ema200Handle == INVALID_HANDLE || 
-      m_rsiHandle == INVALID_HANDLE || m_atrHandle == INVALID_HANDLE || 
-      m_macdHandle == INVALID_HANDLE || m_stochHandle == INVALID_HANDLE || 
-      m_bollingerHandle == INVALID_HANDLE) {
+   // Verificar se o pool de handles está disponível
+   if(m_handlePool == NULL) {
       if(m_logger != NULL) {
-         m_logger.Warning("Um ou mais handles de indicadores são inválidos para " + m_symbol);
+         m_logger.Warning("Pool de handles não disponível para " + m_symbol);
+      }
+      return false;
+   }
+   
+   // Tentar obter um handle básico para verificar se o sistema está funcionando
+   CIndicatorHandle* emaHandle = GetEMAHandle(200);
+   if(emaHandle == NULL || !emaHandle.IsValid()) {
+      if(m_logger != NULL) {
+         m_logger.Warning("Não foi possível obter handle EMA200 para " + m_symbol);
       }
       return false;
    }
    
    // Verificar se os buffers dos indicadores têm dados suficientes
    double buffer[];
-   if(CopyBuffer(m_ema200Handle, 0, 0, 1, buffer) <= 0) {
+   if(emaHandle.CopyBuffer(0, 0, 1, buffer) <= 0) {
       if(m_logger != NULL) {
          m_logger.Warning("Dados de indicadores insuficientes para " + m_symbol);
       }
@@ -534,10 +368,13 @@ bool CMarketContext::IsTrend(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
    }
    
    // Verificar RSI
-   double rsiBuffer[];
-   int rsiHandle = GetIndicatorHandle(m_rsiHandle, timeframe);
+   CIndicatorHandle* rsiHandle = GetRSIHandle(timeframe);
+   if(rsiHandle == NULL || !rsiHandle.IsValid()) {
+      return false;
+   }
    
-   if(rsiHandle == INVALID_HANDLE || CopyBuffer(rsiHandle, 0, 0, 3, rsiBuffer) <= 0) {
+   double rsiBuffer[];
+   if(rsiHandle.CopyBuffer(0, 0, 3, rsiBuffer) <= 0) {
       return false;
    }
    
@@ -565,16 +402,25 @@ bool CMarketContext::IsRange(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
       return false;
    }
    
+   // Obter handles dos indicadores
+   CIndicatorHandle* ema9Handle = GetEMAHandle(9, timeframe);
+   CIndicatorHandle* ema21Handle = GetEMAHandle(21, timeframe);
+   CIndicatorHandle* ema50Handle = GetEMAHandle(50, timeframe);
+   CIndicatorHandle* atrHandle = GetATRHandle(timeframe);
+   CIndicatorHandle* rsiHandle = GetRSIHandle(timeframe);
+   
+   if(ema9Handle == NULL || ema21Handle == NULL || ema50Handle == NULL || 
+      atrHandle == NULL || rsiHandle == NULL ||
+      !ema9Handle.IsValid() || !ema21Handle.IsValid() || !ema50Handle.IsValid() ||
+      !atrHandle.IsValid() || !rsiHandle.IsValid()) {
+      return false;
+   }
+   
    // Verificar se as médias móveis estão próximas
    double ema9Buffer[], ema21Buffer[], ema50Buffer[];
-   int ema9Handle = GetIndicatorHandle(m_ema9Handle, timeframe);
-   int ema21Handle = GetIndicatorHandle(m_ema21Handle, timeframe);
-   int ema50Handle = GetIndicatorHandle(m_ema50Handle, timeframe);
-   
-   if(ema9Handle == INVALID_HANDLE || ema21Handle == INVALID_HANDLE || ema50Handle == INVALID_HANDLE ||
-      CopyBuffer(ema9Handle, 0, 0, 3, ema9Buffer) <= 0 ||
-      CopyBuffer(ema21Handle, 0, 0, 3, ema21Buffer) <= 0 ||
-      CopyBuffer(ema50Handle, 0, 0, 3, ema50Buffer) <= 0) {
+   if(ema9Handle.CopyBuffer(0, 0, 3, ema9Buffer) <= 0 ||
+      ema21Handle.CopyBuffer(0, 0, 3, ema21Buffer) <= 0 ||
+      ema50Handle.CopyBuffer(0, 0, 3, ema50Buffer) <= 0) {
       return false;
    }
    
@@ -584,9 +430,7 @@ bool CMarketContext::IsRange(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
    
    // Obter ATR para normalizar a distância
    double atrBuffer[];
-   int atrHandle = GetIndicatorHandle(m_atrHandle, timeframe);
-   
-   if(atrHandle == INVALID_HANDLE || CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0) {
+   if(atrHandle.CopyBuffer(0, 0, 1, atrBuffer) <= 0) {
       return false;
    }
    
@@ -601,9 +445,7 @@ bool CMarketContext::IsRange(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
    
    // Verificar RSI
    double rsiBuffer[];
-   int rsiHandle = GetIndicatorHandle(m_rsiHandle, timeframe);
-   
-   if(rsiHandle == INVALID_HANDLE || CopyBuffer(rsiHandle, 0, 0, 3, rsiBuffer) <= 0) {
+   if(rsiHandle.CopyBuffer(0, 0, 3, rsiBuffer) <= 0) {
       return false;
    }
    
@@ -625,13 +467,19 @@ bool CMarketContext::IsReversal(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
       return false;
    }
    
+   // Obter handle do RSI
+   CIndicatorHandle* rsiHandle = GetRSIHandle(timeframe);
+   if(rsiHandle == NULL || !rsiHandle.IsValid()) {
+      return false;
+   }
+   
    // Verificar divergência no RSI
    double rsiBuffer[];
    double closeBuffer[];
-   int rsiHandle = GetIndicatorHandle(m_rsiHandle, timeframe);
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
    
-   if(rsiHandle == INVALID_HANDLE || CopyBuffer(rsiHandle, 0, 0, 10, rsiBuffer) <= 0 ||
-      CopyClose(m_symbol, timeframe, 0, 10, closeBuffer) <= 0) {
+   if(rsiHandle.CopyBuffer(0, 0, 10, rsiBuffer) <= 0 ||
+      CopyClose(m_symbol, tf, 0, 10, closeBuffer) <= 0) {
       return false;
    }
    
@@ -652,13 +500,17 @@ bool CMarketContext::IsReversal(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
    bool overbought = rsiBuffer[0] > 70;
    
    // Verificar cruzamento de médias móveis
-   double ema9Buffer[], ema21Buffer[];
-   int ema9Handle = GetIndicatorHandle(m_ema9Handle, timeframe);
-   int ema21Handle = GetIndicatorHandle(m_ema21Handle, timeframe);
+   CIndicatorHandle* ema9Handle = GetEMAHandle(9, timeframe);
+   CIndicatorHandle* ema21Handle = GetEMAHandle(21, timeframe);
    
-   if(ema9Handle == INVALID_HANDLE || ema21Handle == INVALID_HANDLE ||
-      CopyBuffer(ema9Handle, 0, 0, 3, ema9Buffer) <= 0 ||
-      CopyBuffer(ema21Handle, 0, 0, 3, ema21Buffer) <= 0) {
+   if(ema9Handle == NULL || ema21Handle == NULL ||
+      !ema9Handle.IsValid() || !ema21Handle.IsValid()) {
+      return false;
+   }
+   
+   double ema9Buffer[], ema21Buffer[];
+   if(ema9Handle.CopyBuffer(0, 0, 3, ema9Buffer) <= 0 ||
+      ema21Handle.CopyBuffer(0, 0, 3, ema21Buffer) <= 0) {
       return false;
    }
    
@@ -677,18 +529,22 @@ bool CMarketContext::IsReversal(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
 //| Verificar alinhamento das médias móveis                          |
 //+------------------------------------------------------------------+
 bool CMarketContext::CheckMovingAveragesAlignment(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
-   double ema9Buffer[], ema21Buffer[], ema50Buffer[], ema200Buffer[];
-   int ema9Handle = GetIndicatorHandle(m_ema9Handle, timeframe);
-   int ema21Handle = GetIndicatorHandle(m_ema21Handle, timeframe);
-   int ema50Handle = GetIndicatorHandle(m_ema50Handle, timeframe);
-   int ema200Handle = GetIndicatorHandle(m_ema200Handle, timeframe);
+   // Obter handles das médias móveis
+   CIndicatorHandle* ema9Handle = GetEMAHandle(9, timeframe);
+   CIndicatorHandle* ema21Handle = GetEMAHandle(21, timeframe);
+   CIndicatorHandle* ema50Handle = GetEMAHandle(50, timeframe);
+   CIndicatorHandle* ema200Handle = GetEMAHandle(200, timeframe);
    
-   if(ema9Handle == INVALID_HANDLE || ema21Handle == INVALID_HANDLE || 
-      ema50Handle == INVALID_HANDLE || ema200Handle == INVALID_HANDLE ||
-      CopyBuffer(ema9Handle, 0, 0, 1, ema9Buffer) <= 0 ||
-      CopyBuffer(ema21Handle, 0, 0, 1, ema21Buffer) <= 0 ||
-      CopyBuffer(ema50Handle, 0, 0, 1, ema50Buffer) <= 0 ||
-      CopyBuffer(ema200Handle, 0, 0, 1, ema200Buffer) <= 0) {
+   if(ema9Handle == NULL || ema21Handle == NULL || ema50Handle == NULL || ema200Handle == NULL ||
+      !ema9Handle.IsValid() || !ema21Handle.IsValid() || !ema50Handle.IsValid() || !ema200Handle.IsValid()) {
+      return false;
+   }
+   
+   double ema9Buffer[], ema21Buffer[], ema50Buffer[], ema200Buffer[];
+   if(ema9Handle.CopyBuffer(0, 0, 1, ema9Buffer) <= 0 ||
+      ema21Handle.CopyBuffer(0, 0, 1, ema21Buffer) <= 0 ||
+      ema50Handle.CopyBuffer(0, 0, 1, ema50Buffer) <= 0 ||
+      ema200Handle.CopyBuffer(0, 0, 1, ema200Buffer) <= 0) {
       return false;
    }
    
@@ -709,12 +565,14 @@ bool CMarketContext::CheckMovingAveragesAlignment(ENUM_TIMEFRAMES timeframe = PE
 //| Verificar momentum                                               |
 //+------------------------------------------------------------------+
 bool CMarketContext::CheckMomentum(ENUM_TIMEFRAMES timeframe = PERIOD_CURRENT) {
-   double macdBuffer[], signalBuffer[];
-   int macdHandle = GetIndicatorHandle(m_macdHandle, timeframe);
+   CIndicatorHandle* macdHandle = GetMACDHandle(timeframe);
+   if(macdHandle == NULL || !macdHandle.IsValid()) {
+      return false;
+   }
    
-   if(macdHandle == INVALID_HANDLE || 
-      CopyBuffer(macdHandle, 0, 0, 3, macdBuffer) <= 0 ||
-      CopyBuffer(macdHandle, 1, 0, 3, signalBuffer) <= 0) {
+   double macdBuffer[], signalBuffer[];
+   if(macdHandle.CopyBuffer(0, 0, 3, macdBuffer) <= 0 ||
+      macdHandle.CopyBuffer(1, 0, 3, signalBuffer) <= 0) {
       return false;
    }
    
@@ -866,10 +724,13 @@ double CMarketContext::GetATR(int period = 14, ENUM_TIMEFRAMES timeframe = PERIO
       return 0.0;
    }
    
-   double atrBuffer[];
-   int atrHandle = GetIndicatorHandle(m_atrHandle, timeframe);
+   CIndicatorHandle* atrHandle = GetATRHandle(timeframe);
+   if(atrHandle == NULL || !atrHandle.IsValid()) {
+      return 0.0;
+   }
    
-   if(atrHandle == INVALID_HANDLE || CopyBuffer(atrHandle, 0, 0, 1, atrBuffer) <= 0) {
+   double atrBuffer[];
+   if(atrHandle.CopyBuffer(0, 0, 1, atrBuffer) <= 0) {
       return 0.0;
    }
    
@@ -885,26 +746,25 @@ double CMarketContext::GetVolatilityRatio() {
       return 0.0;
    }
    
-   double atrBuffer[];
-   if(CopyBuffer(m_atrHandle, 0, 0, 20, atrBuffer) <= 0) {
+   CIndicatorHandle* atrHandle = GetATRHandle();
+   if(atrHandle == NULL || !atrHandle.IsValid()) {
       return 0.0;
    }
    
-   double currentATR = atrBuffer[0];
-   double avgATR = 0.0;
+   double atrBuffer[];
+   if(atrHandle.CopyBuffer(0, 0, 20, atrBuffer) <= 0) {
+      return 0.0;
+   }
    
-   // Calcular média do ATR dos últimos 20 períodos
+   // Calcular média dos últimos 20 períodos
+   double avgATR = 0.0;
    for(int i = 0; i < 20; i++) {
       avgATR += atrBuffer[i];
    }
-   avgATR /= 20;
+   avgATR /= 20.0;
    
-   // Calcular razão de volatilidade
-   if(avgATR > 0) {
-      return currentATR / avgATR;
-   }
-   
-   return 0.0;
+   // Retornar razão entre ATR atual e média
+   return (avgATR > 0) ? atrBuffer[0] / avgATR : 0.0;
 }
 
 //+------------------------------------------------------------------+
@@ -916,39 +776,34 @@ double CMarketContext::GetTrendStrength() {
       return 0.0;
    }
    
-   // Verificar direção da tendência
-   int direction = CheckTrendDirection();
-   if(direction == 0) {
+   // Obter handles das médias móveis
+   CIndicatorHandle* ema9Handle = GetEMAHandle(9);
+   CIndicatorHandle* ema21Handle = GetEMAHandle(21);
+   CIndicatorHandle* ema50Handle = GetEMAHandle(50);
+   CIndicatorHandle* ema200Handle = GetEMAHandle(200);
+   
+   if(ema9Handle == NULL || ema21Handle == NULL || ema50Handle == NULL || ema200Handle == NULL ||
+      !ema9Handle.IsValid() || !ema21Handle.IsValid() || !ema50Handle.IsValid() || !ema200Handle.IsValid()) {
       return 0.0;
    }
    
-   // Obter valores de indicadores
-   double rsiBuffer[];
-   double macdBuffer[];
-   
-   if(CopyBuffer(m_rsiHandle, 0, 0, 1, rsiBuffer) <= 0 ||
-      CopyBuffer(m_macdHandle, 0, 0, 1, macdBuffer) <= 0) {
+   double ema9Buffer[], ema21Buffer[], ema50Buffer[], ema200Buffer[];
+   if(ema9Handle.CopyBuffer(0, 0, 1, ema9Buffer) <= 0 ||
+      ema21Handle.CopyBuffer(0, 0, 1, ema21Buffer) <= 0 ||
+      ema50Handle.CopyBuffer(0, 0, 1, ema50Buffer) <= 0 ||
+      ema200Handle.CopyBuffer(0, 0, 1, ema200Buffer) <= 0) {
       return 0.0;
    }
    
-   double rsi = rsiBuffer[0];
-   double macd = macdBuffer[0];
+   // Calcular distâncias entre médias
+   double distance1 = MathAbs(ema9Buffer[0] - ema21Buffer[0]);
+   double distance2 = MathAbs(ema21Buffer[0] - ema50Buffer[0]);
+   double distance3 = MathAbs(ema50Buffer[0] - ema200Buffer[0]);
    
-   // Calcular força da tendência
-   double strength = 0.0;
+   // Normalizar pela EMA200
+   double normalizedDistance = (distance1 + distance2 + distance3) / ema200Buffer[0];
    
-   if(direction > 0) {  // Tendência de alta
-      strength = (rsi - 50) / 50.0;  // Normalizar RSI para 0-1
-      strength += MathAbs(macd) / 100.0;  // Adicionar contribuição do MACD
-   } else {  // Tendência de baixa
-      strength = (50 - rsi) / 50.0;  // Normalizar RSI para 0-1
-      strength += MathAbs(macd) / 100.0;  // Adicionar contribuição do MACD
-   }
-   
-   // Normalizar para 0-1
-   strength = MathMin(strength / 2.0, 1.0);
-   
-   return strength;
+   return normalizedDistance * 100.0; // Retornar como percentual
 }
 
 //+------------------------------------------------------------------+
@@ -960,35 +815,17 @@ bool CMarketContext::IsPriceAboveEMA(int emaPeriod, ENUM_TIMEFRAMES timeframe = 
       return false;
    }
    
-   // Selecionar handle correto
-   int emaHandle = INVALID_HANDLE;
-   switch(emaPeriod) {
-      case 9:
-         emaHandle = GetIndicatorHandle(m_ema9Handle, timeframe);
-         break;
-      case 21:
-         emaHandle = GetIndicatorHandle(m_ema21Handle, timeframe);
-         break;
-      case 50:
-         emaHandle = GetIndicatorHandle(m_ema50Handle, timeframe);
-         break;
-      case 200:
-         emaHandle = GetIndicatorHandle(m_ema200Handle, timeframe);
-         break;
-      default:
-         return false;
-   }
-   
-   if(emaHandle == INVALID_HANDLE) {
+   CIndicatorHandle* emaHandle = GetEMAHandle(emaPeriod, timeframe);
+   if(emaHandle == NULL || !emaHandle.IsValid()) {
       return false;
    }
    
-   // Obter valores
    double emaBuffer[];
    double closeBuffer[];
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
    
-   if(CopyBuffer(emaHandle, 0, 0, 1, emaBuffer) <= 0 ||
-      CopyClose(m_symbol, timeframe, 0, 1, closeBuffer) <= 0) {
+   if(emaHandle.CopyBuffer(0, 0, 1, emaBuffer) <= 0 ||
+      CopyClose(m_symbol, tf, 0, 1, closeBuffer) <= 0) {
       return false;
    }
    
@@ -1004,35 +841,17 @@ bool CMarketContext::IsPriceBelowEMA(int emaPeriod, ENUM_TIMEFRAMES timeframe = 
       return false;
    }
    
-   // Selecionar handle correto
-   int emaHandle = INVALID_HANDLE;
-   switch(emaPeriod) {
-      case 9:
-         emaHandle = GetIndicatorHandle(m_ema9Handle, timeframe);
-         break;
-      case 21:
-         emaHandle = GetIndicatorHandle(m_ema21Handle, timeframe);
-         break;
-      case 50:
-         emaHandle = GetIndicatorHandle(m_ema50Handle, timeframe);
-         break;
-      case 200:
-         emaHandle = GetIndicatorHandle(m_ema200Handle, timeframe);
-         break;
-      default:
-         return false;
-   }
-   
-   if(emaHandle == INVALID_HANDLE) {
+   CIndicatorHandle* emaHandle = GetEMAHandle(emaPeriod, timeframe);
+   if(emaHandle == NULL || !emaHandle.IsValid()) {
       return false;
    }
    
-   // Obter valores
    double emaBuffer[];
    double closeBuffer[];
+   ENUM_TIMEFRAMES tf = (timeframe == PERIOD_CURRENT) ? m_timeframe : timeframe;
    
-   if(CopyBuffer(emaHandle, 0, 0, 1, emaBuffer) <= 0 ||
-      CopyClose(m_symbol, timeframe, 0, 1, closeBuffer) <= 0) {
+   if(emaHandle.CopyBuffer(0, 0, 1, emaBuffer) <= 0 ||
+      CopyClose(m_symbol, tf, 0, 1, closeBuffer) <= 0) {
       return false;
    }
    
@@ -1048,25 +867,35 @@ int CMarketContext::CheckTrendDirection() {
       return 0;
    }
    
-   // Obter valores das médias móveis
-   double ema9Buffer[], ema21Buffer[], ema50Buffer[];
+   // Obter handles das médias móveis
+   CIndicatorHandle* ema9Handle = GetEMAHandle(9);
+   CIndicatorHandle* ema21Handle = GetEMAHandle(21);
+   CIndicatorHandle* ema50Handle = GetEMAHandle(50);
+   CIndicatorHandle* ema200Handle = GetEMAHandle(200);
    
-   if(CopyBuffer(m_ema9Handle, 0, 0, 1, ema9Buffer) <= 0 ||
-      CopyBuffer(m_ema21Handle, 0, 0, 1, ema21Buffer) <= 0 ||
-      CopyBuffer(m_ema50Handle, 0, 0, 1, ema50Buffer) <= 0) {
+   if(ema9Handle == NULL || ema21Handle == NULL || ema50Handle == NULL || ema200Handle == NULL ||
+      !ema9Handle.IsValid() || !ema21Handle.IsValid() || !ema50Handle.IsValid() || !ema200Handle.IsValid()) {
       return 0;
    }
    
-   // Verificar tendência de alta
-   if(ema9Buffer[0] > ema21Buffer[0] && ema21Buffer[0] > ema50Buffer[0]) {
-      return 1;  // Tendência de alta
+   double ema9Buffer[], ema21Buffer[], ema50Buffer[], ema200Buffer[];
+   if(ema9Handle.CopyBuffer(0, 0, 1, ema9Buffer) <= 0 ||
+      ema21Handle.CopyBuffer(0, 0, 1, ema21Buffer) <= 0 ||
+      ema50Handle.CopyBuffer(0, 0, 1, ema50Buffer) <= 0 ||
+      ema200Handle.CopyBuffer(0, 0, 1, ema200Buffer) <= 0) {
+      return 0;
    }
    
-   // Verificar tendência de baixa
-   if(ema9Buffer[0] < ema21Buffer[0] && ema21Buffer[0] < ema50Buffer[0]) {
-      return -1;  // Tendência de baixa
+   // Verificar alinhamento para tendência de alta
+   if(ema9Buffer[0] > ema21Buffer[0] && ema21Buffer[0] > ema50Buffer[0] && ema50Buffer[0] > ema200Buffer[0]) {
+      return 1; // Tendência de alta
    }
    
-   return 0;  // Sem tendência definida
+   // Verificar alinhamento para tendência de baixa
+   if(ema9Buffer[0] < ema21Buffer[0] && ema21Buffer[0] < ema50Buffer[0] && ema50Buffer[0] < ema200Buffer[0]) {
+      return -1; // Tendência de baixa
+   }
+   
+   return 0; // Sem tendência clara
 }
-//+------------------------------------------------------------------+
+

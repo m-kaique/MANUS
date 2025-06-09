@@ -27,6 +27,7 @@
 #include "Utils.mqh"
 #include "SetupClassifier.mqh"
 #include "JsonLog.mqh"
+#include "Indicators/IndicatorHandlePool.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -56,6 +57,7 @@ input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualid
 //+------------------------------------------------------------------+
 // Objetos globais
 CLogger *g_logger = NULL;
+CHandlePool *g_handlePool = NULL;                               // ← NOVO: Pool global de handles
 CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
 CRiskManager *g_riskManager = NULL;
@@ -422,6 +424,22 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+   // Inicializar pool de handles
+   g_handlePool = new CHandlePool(200); // Capacidade para 200 handles
+   if (g_handlePool == NULL)
+   {
+      g_logger.Error("Erro ao criar pool de handles");
+      return (INIT_FAILED);
+   }
+   
+   if (!g_handlePool.Initialize(g_logger))
+   {
+      g_logger.Error("Falha ao inicializar pool de handles");
+      return (INIT_FAILED);
+   }
+   
+   g_logger.Info("Pool de handles inicializado com sucesso");
+
    // Inicializar componentes
    g_marketContext = new CMarketContext();
    if (g_marketContext == NULL)
@@ -430,9 +448,9 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   // Inicializar MarketContext com o símbolo do gráfico atual e timeframe principal
+   // Inicializar MarketContext com o pool de handles
    // Passamos o flag de verificação de histórico para false, pois verificaremos em OnTick
-   if (!g_marketContext.Initialize(Symbol(), MainTimeframe, g_logger, false))
+   if (!g_marketContext.Initialize(Symbol(), MainTimeframe, g_handlePool, g_logger, false))
    {
       g_logger.Error("Falha ao inicializar MarketContext");
       return (INIT_FAILED);
@@ -590,6 +608,17 @@ void OnDeinit(const int reason)
    {
       delete g_marketContext;
       g_marketContext = NULL;
+   }
+
+   // Liberar pool de handles
+   if (g_handlePool != NULL)
+   {
+      if (g_logger != NULL)
+      {
+         g_handlePool.PrintStats(); // Imprimir estatísticas finais
+      }
+      delete g_handlePool;
+      g_handlePool = NULL;
    }
 
    // O logger deve ser o último a ser liberado

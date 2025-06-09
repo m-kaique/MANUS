@@ -9,8 +9,8 @@
 #property strict
 
 #include "IndicatorHandle.mqh"
-#include "Logger.mqh"
-#include "Structures.mqh"
+#include "../Logger.mqh"
+#include "../Structures.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para gerenciamento centralizado de handles de indicadores |
@@ -134,7 +134,7 @@ CIndicatorHandle* CHandlePool::GetMA(string symbol, ENUM_TIMEFRAMES timeframe, i
 {
    // Criar parâmetros
    IndicatorParams params;
-   params.type = IND_MA;
+   params.type = I_IND_MA;
    params.symbol = symbol;
    params.timeframe = timeframe;
    params.period1 = period;
@@ -220,7 +220,7 @@ CIndicatorHandle* CHandlePool::GetEMA(string symbol, ENUM_TIMEFRAMES timeframe, 
 CIndicatorHandle* CHandlePool::GetRSI(string symbol, ENUM_TIMEFRAMES timeframe, int period, ENUM_APPLIED_PRICE price)
 {
    IndicatorParams params;
-   params.type = IND_RSI;
+   params.type = I_IND_RSI;
    params.symbol = symbol;
    params.timeframe = timeframe;
    params.period1 = period;
@@ -276,7 +276,7 @@ CIndicatorHandle* CHandlePool::GetRSI(string symbol, ENUM_TIMEFRAMES timeframe, 
 CIndicatorHandle* CHandlePool::GetATR(string symbol, ENUM_TIMEFRAMES timeframe, int period)
 {
    IndicatorParams params;
-   params.type = IND_ATR;
+   params.type = I_IND_ATR;
    params.symbol = symbol;
    params.timeframe = timeframe;
    params.period1 = period;
@@ -326,7 +326,7 @@ CIndicatorHandle* CHandlePool::GetATR(string symbol, ENUM_TIMEFRAMES timeframe, 
 CIndicatorHandle* CHandlePool::GetMACD(string symbol, ENUM_TIMEFRAMES timeframe, int fast, int slow, int signal, ENUM_APPLIED_PRICE price)
 {
    IndicatorParams params;
-   params.type = IND_MACD;
+   params.type = I_IND_MACD;
    params.symbol = symbol;
    params.timeframe = timeframe;
    params.period1 = fast;
@@ -379,7 +379,7 @@ CIndicatorHandle* CHandlePool::GetMACD(string symbol, ENUM_TIMEFRAMES timeframe,
 CIndicatorHandle* CHandlePool::GetBollinger(string symbol, ENUM_TIMEFRAMES timeframe, int period, double deviation, int shift, ENUM_APPLIED_PRICE price)
 {
    IndicatorParams params;
-   params.type = IND_BOLLINGER;
+   params.type = I_IND_BOLLINGER;
    params.symbol = symbol;
    params.timeframe = timeframe;
    params.period1 = period;
