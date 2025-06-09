@@ -1295,7 +1295,8 @@ Signal CSpikeAndChannel::GenerateSignal(string symbol, ENUM_TIMEFRAMES timeframe
 }
 
 //+------------------------------------------------------------------+
-//| ✅ NOVA FUNÇÃO: Calcular stop loss melhorado                    |
+//| ✅ FUNÇÃO CORRIGIDA: Calcular stop loss melhorado               |
+//| CORREÇÃO CRÍTICA: Usar stops mais conservadores, não maiores    |
 //+------------------------------------------------------------------+
 double CSpikeAndChannel::CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAMES timeframe, SpikeChannelPattern &pattern, double entryPrice, double originalStopLoss)
 {
@@ -1320,21 +1321,21 @@ double CSpikeAndChannel::CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAME
 
    if (atrValue > 0)
    {
-      // ✅ USAR ATR COM MULTIPLICADOR CONSERVADOR
-      double atrMultiplier = 3.0; // Mais conservador que 2.0
+      // ✅ CORREÇÃO: Usar ATR com multiplicador CONSERVADOR
+      double atrMultiplier = 1.5; // REDUZIDO de 3.0 para 1.5
 
-      // Ajustar multiplicador baseado no símbolo
+      // ✅ CORREÇÃO: Multiplicadores mais conservadores por símbolo
       if (StringFind(symbol, "WIN") >= 0)
       {
-         atrMultiplier = 2.5; // WIN é mais volátil
+         atrMultiplier = 1.2; // REDUZIDO de 2.5 para 1.2
       }
       else if (StringFind(symbol, "WDO") >= 0)
       {
-         atrMultiplier = 3.5; // WDO precisa de mais espaço
+         atrMultiplier = 1.8; // REDUZIDO de 3.5 para 1.8
       }
       else if (StringFind(symbol, "BIT") >= 0)
       {
-         atrMultiplier = 2.8; // BTC intermediário
+         atrMultiplier = 1.5; // REDUZIDO de 2.8 para 1.5
       }
 
       improvedStopDistance = atrValue * atrMultiplier;
@@ -1348,25 +1349,25 @@ double CSpikeAndChannel::CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAME
    else
    {
       // ✅ MÉTODO 2: Usar altura do spike como referência
-      double spikeBasedStop = pattern.spikeHeight * 0.5; // 50% da altura do spike
+      double spikeBasedStop = pattern.spikeHeight * 0.3; // REDUZIDO de 0.5 para 0.3
 
-      // ✅ MÉTODO 3: Usar distância fixa por símbolo
+      // ✅ CORREÇÃO CRÍTICA: Distâncias fixas CONSERVADORAS
       double fixedStopDistance = 0;
       if (StringFind(symbol, "WIN") >= 0)
       {
-         fixedStopDistance = 400 * point; // 400 pontos para WIN
+         fixedStopDistance = 150 * point; // REDUZIDO de 400 para 150 pontos
       }
       else if (StringFind(symbol, "WDO") >= 0)
       {
-         fixedStopDistance = 12 * point; // 12 pontos para WDO
+         fixedStopDistance = 8 * point; // REDUZIDO de 12 para 8 pontos
       }
       else if (StringFind(symbol, "BIT") >= 0)
       {
-         fixedStopDistance = 800 * point; // 800 USD para BTC
+         fixedStopDistance = 500 * point; // REDUZIDO de 800 para 500 USD
       }
       else
       {
-         fixedStopDistance = 100 * point; // 100 pontos padrão
+         fixedStopDistance = 50 * point; // REDUZIDO de 100 para 50 pontos
       }
 
       // Usar o maior entre spike-based e fixed
@@ -1379,12 +1380,16 @@ double CSpikeAndChannel::CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAME
       }
    }
 
-   // ✅ COMPARAR COM STOP ORIGINAL E USAR O MAIS CONSERVADOR
+   // ✅ CORREÇÃO CRÍTICA: Usar o MENOR stop (mais conservador)
    double originalStopDistance = MathAbs(entryPrice - originalStopLoss);
-   double finalStopDistance = MathMax(improvedStopDistance, originalStopDistance);
+   double finalStopDistance = MathMin(improvedStopDistance, originalStopDistance); // MUDOU de MathMax para MathMin
 
-   // ✅ APLICAR BUFFER ADICIONAL DE SEGURANÇA
-   finalStopDistance *= 1.2; // +20% buffer
+   // ✅ CORREÇÃO: Remover buffer excessivo - usar apenas pequeno ajuste se necessário
+   // finalStopDistance *= 1.2; // ← REMOVIDO: Buffer de +20% que estava causando o problema
+   
+   // ✅ PROTEÇÃO: Garantir que não seja menor que mínimo do símbolo
+   double minStopDistance = GetMinimumStopDistance(symbol);
+   finalStopDistance = MathMax(finalStopDistance, minStopDistance);
 
    // Calcular stop loss final
    double finalStopLoss = 0;
@@ -1402,10 +1407,11 @@ double CSpikeAndChannel::CalculateImprovedStopLoss(string symbol, ENUM_TIMEFRAME
    if (m_logger != NULL)
    {
       double finalStopPoints = finalStopDistance / point;
-      m_logger.Info(StringFormat("SpikeAndChannel: Stop MELHORADO - Original: %.1f pontos, Novo: %.1f pontos (+%.1f%%)",
-                                 originalStopDistance / point,
+      double originalStopPoints = originalStopDistance / point;
+      m_logger.Info(StringFormat("SpikeAndChannel: Stop CORRIGIDO - Original: %.1f pontos, Novo: %.1f pontos (%.1f%% do original)",
+                                 originalStopPoints,
                                  finalStopPoints,
-                                 ((finalStopDistance - originalStopDistance) / originalStopDistance) * 100));
+                                 (finalStopDistance / originalStopDistance) * 100));
    }
 
    return finalStopLoss;

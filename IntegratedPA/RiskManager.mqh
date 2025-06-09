@@ -737,39 +737,96 @@ PARTIAL_STRATEGY CRiskManager::DetermineOptimalStrategy(string symbol, double vo
 
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO CORRIGIDA: ApplyScaledStrategy                       |
-//| Aplica estratégia de volume escalado                            |
+//| Aplica estratégia de volume escalado com proteções robustas     |
 //+------------------------------------------------------------------+
 AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config, 
                                                        LotCharacteristics &lotChar, 
                                                        double &percentages[], int numPartials)
 {
-   // Encontrar menor percentual
+   // ✅ CORREÇÃO #1: Encontrar menor percentual com validação
    double smallestPercentage = 1.0;
+   bool hasValidPercentages = false;
+   
    for (int i = 0; i < numPartials; i++)
    {
       if (percentages[i] > 0)
       {
-         smallestPercentage = MathMin(smallestPercentage, percentages[i]);
+         // ✅ PROTEÇÃO: Percentual mínimo de 0.1% (0.001) para evitar overflow
+         if (percentages[i] >= 0.001)
+         {
+            smallestPercentage = MathMin(smallestPercentage, percentages[i]);
+            hasValidPercentages = true;
+         }
+         else
+         {
+            if (m_logger != NULL)
+            {
+               m_logger.Warning(StringFormat("⚠️ PERCENTUAL MUITO PEQUENO ignorado para %s: %.6f (mínimo: 0.1%%)", 
+                                           symbol, percentages[i]));
+            }
+         }
       }
    }
    
-   // Calcular volume mínimo necessário
+   // ✅ CORREÇÃO #2: Validar se há percentuais válidos
+   if (!hasValidPercentages || smallestPercentage >= 1.0)
+   {
+      config.enabled = false;
+      config.reason = "Percentuais inválidos ou muito pequenos";
+      if (m_logger != NULL)
+      {
+         m_logger.Error(StringFormat("❌ ESCALONAMENTO FALHOU para %s: percentuais inválidos (menor: %.6f)", 
+                                   symbol, smallestPercentage));
+      }
+      return config;
+   }
+   
+   // ✅ CORREÇÃO #3: Calcular volume mínimo com proteção contra overflow
    double minVolumeNeeded = lotChar.minLot / smallestPercentage;
    
-   // Arredondar para cima para o próximo lote inteiro
+   // ✅ PROTEÇÃO: Limite máximo de escalonamento (100x o volume original)
+   double maxAllowedVolume = config.originalVolume * 100.0;
+   
+   if (minVolumeNeeded > maxAllowedVolume)
+   {
+      config.enabled = false;
+      config.reason = StringFormat("Escalonamento excessivo necessário: %.1fx (máximo: 100x)", 
+                                  minVolumeNeeded / config.originalVolume);
+      if (m_logger != NULL)
+      {
+         m_logger.Warning(StringFormat("⚠️ ESCALONAMENTO LIMITADO para %s: %.2f → %.2f (seria %.2f)", 
+                                     symbol, config.originalVolume, maxAllowedVolume, minVolumeNeeded));
+      }
+      return config;
+   }
+   
+   // ✅ CORREÇÃO #4: Arredondar para cima com validação
    minVolumeNeeded = MathCeil(minVolumeNeeded / lotChar.minLot) * lotChar.minLot;
    
-   // Aplicar escalonamento
+   // ✅ CORREÇÃO #5: Aplicar escalonamento com validações
    config.finalVolume = MathMax(config.originalVolume, minVolumeNeeded);
    config.volumeWasScaled = (config.finalVolume > config.originalVolume);
-   config.scalingFactor = config.finalVolume / config.originalVolume;
+   
+   // ✅ PROTEÇÃO: Evitar divisão por zero
+   if (config.originalVolume > 0)
+   {
+      config.scalingFactor = config.finalVolume / config.originalVolume;
+   }
+   else
+   {
+      config.scalingFactor = 1.0;
+   }
+   
    config.enabled = true;
    config.reason = StringFormat("Volume escalado %.1fx para permitir parciais", config.scalingFactor);
    
+   // ✅ LOG DETALHADO PARA DEBUGGING
    if (m_logger != NULL)
    {
-      m_logger.Info(StringFormat("Volume escalado para %s: %.2f → %.2f (fator: %.1fx)", 
+      m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (fator: %.1fx) para permitir parciais", 
                                 symbol, config.originalVolume, config.finalVolume, config.scalingFactor));
+      m_logger.Debug(StringFormat("📊 DETALHES: menor percentual: %.3f%%, volume mínimo calculado: %.2f", 
+                                smallestPercentage * 100, minVolumeNeeded));
    }
    
    return config;
@@ -885,15 +942,39 @@ bool CRiskManager::ValidateFractionalPartials(string symbol, double totalVolume,
    if (minLot <= 0) minLot = 0.01;
    if (stepLot <= 0) stepLot = 0.01;
    
-   // Para ativos fracionários, validação é mais simples
+   // ✅ CORREÇÃO: Validação robusta de percentuais
    double totalPercentage = 0;
    double minPartialVolume = totalVolume;
+   int validPartials = 0;
    
    for (int i = 0; i < numPartials; i++)
    {
       if (partialPercentages[i] > 0)
       {
+         // ✅ PROTEÇÃO: Verificar se percentual é válido (não muito pequeno, não muito grande)
+         if (partialPercentages[i] < 0.001) // Menor que 0.1%
+         {
+            if (m_logger != NULL)
+            {
+               m_logger.Warning(StringFormat("⚠️ PERCENTUAL MUITO PEQUENO para %s parcial %d: %.6f%% (ignorado)", 
+                                           symbol, i+1, partialPercentages[i] * 100));
+            }
+            partialPercentages[i] = 0; // Zerar percentual inválido
+            continue;
+         }
+         
+         if (partialPercentages[i] > 1.0) // Maior que 100%
+         {
+            if (m_logger != NULL)
+            {
+               m_logger.Warning(StringFormat("⚠️ PERCENTUAL MUITO GRANDE para %s parcial %d: %.1f%% (limitado a 100%%)", 
+                                           symbol, i+1, partialPercentages[i] * 100));
+            }
+            partialPercentages[i] = 1.0; // Limitar a 100%
+         }
+         
          totalPercentage += partialPercentages[i];
+         validPartials++;
          
          double partialVolume = totalVolume * partialPercentages[i];
          minPartialVolume = MathMin(minPartialVolume, partialVolume);
@@ -923,15 +1004,32 @@ bool CRiskManager::ValidateFractionalPartials(string symbol, double totalVolume,
       }
    }
    
-   // Verificar soma dos percentuais
-   if (MathAbs(totalPercentage - 1.0) > 0.01)
+   // ✅ CORREÇÃO: Verificar se há parciais válidas
+   if (validPartials == 0)
    {
       if (m_logger != NULL)
       {
-         m_logger.Error(StringFormat("Soma dos percentuais inválida para %s: %.3f (deveria ser 1.0)", 
-                                   symbol, totalPercentage));
+         m_logger.Error(StringFormat("❌ NENHUMA PARCIAL VÁLIDA para %s", symbol));
       }
       return false;
+   }
+   
+   // ✅ CORREÇÃO: Verificar soma dos percentuais com tolerância maior
+   if (MathAbs(totalPercentage - 1.0) > 0.05) // Tolerância de 5%
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Error(StringFormat("❌ SOMA DOS PERCENTUAIS INVÁLIDA para %s: %.3f%% (deveria ser 100%% ± 5%%)", 
+                                   symbol, totalPercentage * 100));
+      }
+      return false;
+   }
+   
+   // ✅ LOG DE SUCESSO
+   if (m_logger != NULL && totalPercentage != 1.0)
+   {
+      m_logger.Info(StringFormat("✅ PERCENTUAIS AJUSTADOS para %s: %.1f%% (diferença: %.1f%%)", 
+                                symbol, totalPercentage * 100, (totalPercentage - 1.0) * 100));
    }
    
    // Verificar volume mínimo total

@@ -143,7 +143,7 @@
 
 // TRAILING - Ajustado para capturar mais movimento
 #define WIN_TRAILING_STOP           400   // Trailing stop (era 350)
-#define WIN_MIN_STOP_DISTANCE       300   // Distância mínima (era 250)
+#define WIN_MIN_STOP_DISTANCE       100   // CORRIGIDO: Reduzido de 300 para 100 pontos
 
 // NOVOS PARÂMETROS SUGERIDOS
 #define WIN_BREAKEVEN_TRIGGER       400   // Move SL para BE após este lucro

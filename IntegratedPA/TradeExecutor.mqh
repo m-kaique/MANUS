@@ -74,6 +74,25 @@ private:
    // Array de configurações de trailing stop
    TrailingStopConfig m_trailingConfigs[];
 
+   // ✅ ESTRUTURA APRIMORADA: Controle inteligente de parciais com timing automático
+   struct PartialControlConfig
+   {
+      ulong ticket;                    // Ticket da posição
+      string symbol;                   // Símbolo
+      ENUM_TIMEFRAMES timeframe;       // Timeframe para cálculo automático de timing
+      datetime lastPartialTime;        // Timestamp da última parcial
+      double lastPartialPrice;         // Preço da última parcial
+      int partialsExecuted;           // Número de parciais já executadas
+      double nextPartialRR;           // Próximo R:R necessário para parcial
+      bool isActive;                  // Se controle está ativo
+      double entryPrice;              // Preço de entrada (para cálculos)
+      double initialVolume;           // Volume inicial da posição
+      datetime entryTime;             // Timestamp de entrada (para análises)
+   };
+
+   // Array de configurações de controle de parciais
+   PartialControlConfig m_partialConfigs[];
+
    // Métodos privados
    bool IsRetryableError(int errorCode);
    double CalculateFixedTrailingStop(ulong ticket, double fixedPoints);
@@ -109,6 +128,25 @@ private:
 
    // ✅ NOVO MÉTODO: Verificar se breakeven foi acionado
    bool IsBreakevenTriggered(ulong ticket);
+
+   // ✅ NOVOS MÉTODOS: Controle inteligente de parciais
+   bool ConfigurePartialControl(ulong ticket, string symbol, double entryPrice, double initialVolume);
+   int FindPartialConfigIndex(ulong ticket);
+   void RemovePartialConfig(int index);
+   void CleanupPartialConfigs();
+   bool ShouldTakePartialNowIntelligent(ulong ticket, double currentPrice);
+   double CalculatePartialVolumeIntelligent(ulong ticket, double currentVolume);
+   bool IsMinimumTimeElapsed(ulong ticket);
+   bool IsMinimumDistanceAchieved(ulong ticket, double currentPrice);
+   bool IsPriceMovingFavorably(ulong ticket, double currentPrice);
+
+   // ✅ NOVOS MÉTODOS: Sistema de timing automático
+   int CalculateAutomaticTiming(string symbol, ENUM_TIMEFRAMES timeframe, int partialNumber);
+   double GetAssetMultiplier(string symbol);
+   double GetPartialMultiplier(int partialNumber);
+   int GetBaseTimeByTimeframe(ENUM_TIMEFRAMES timeframe);
+   double GetVolatilityMultiplier(string symbol);
+   double GetSessionMultiplier(string symbol);
 
    bool ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE orderType,
                                double &entryPrice, double &stopLoss, double &takeProfit);
@@ -360,9 +398,12 @@ bool CTradeExecutor::Execute(OrderRequest &request)
    {
       AutoConfigureBreakeven(ticket, request.symbol);
       
+      // ✅ NOVO: Configurar controle inteligente de parciais
+      ConfigurePartialControl(ticket, request.symbol, request.price, request.volume);
+      
       if (m_logger != NULL)
       {
-         m_logger.Info(StringFormat("Breakeven configurado para #%d. Trailing será ativado após breakeven.", ticket));
+         m_logger.Info(StringFormat("Breakeven e controle de parciais configurados para #%d. Trailing será ativado após breakeven.", ticket));
       }
    }
 
@@ -1783,15 +1824,16 @@ bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
 }
 
 //+------------------------------------------------------------------+
-//| Gerenciar parciais (chamado a cada tick)                         |
+//| ✅ FUNÇÃO COMPLETAMENTE REESCRITA: ManagePartialTakeProfits     |
+//| CORREÇÃO: Sistema inteligente com controle de tempo e distância |
 //+------------------------------------------------------------------+
 void CTradeExecutor::ManagePartialTakeProfits()
 {
    static datetime lastPartialCheck = 0;
    datetime currentTime = TimeCurrent();
 
-   // ✅ VERIFICAR PARCIAIS A CADA 5 SEGUNDOS (balanceio entre responsividade e performance)
-   if (currentTime - lastPartialCheck < 5)
+   // ✅ CORREÇÃO: Verificar parciais a cada 30 segundos (não 5)
+   if (currentTime - lastPartialCheck < 30)
    {
       return;
    }
@@ -1811,26 +1853,64 @@ void CTradeExecutor::ManagePartialTakeProfits()
       string symbol = PositionGetString(POSITION_SYMBOL);
       double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
       double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      double stopLoss = PositionGetDouble(POSITION_SL);
       double currentVolume = PositionGetDouble(POSITION_VOLUME);
 
-      // ✅ VERIFICAR SE DEVE TOMAR PARCIAL AGORA
-      if (ShouldTakePartialNow(symbol, ticket, currentPrice, entryPrice, stopLoss))
+      // ✅ CONFIGURAR CONTROLE DE PARCIAIS SE NÃO EXISTE
+      int configIndex = FindPartialConfigIndex(ticket);
+      if (configIndex < 0)
       {
-         double partialVolume = CalculatePartialVolume(symbol, ticket, currentVolume);
+         // Configurar controle para posições existentes
+         double initialVolume = currentVolume; // Assumir volume atual como inicial
+         ConfigurePartialControl(ticket, symbol, entryPrice, initialVolume);
+         continue; // Pular para próxima iteração para dar tempo de configurar
+      }
+
+      // ✅ VERIFICAR SE DEVE TOMAR PARCIAL COM LÓGICA INTELIGENTE
+      if (ShouldTakePartialNowIntelligent(ticket, currentPrice))
+      {
+         double partialVolume = CalculatePartialVolumeIntelligent(ticket, currentVolume);
 
          if (partialVolume > 0 && partialVolume < currentVolume)
          {
             if (ClosePosition(ticket, partialVolume))
             {
+               // ✅ ATUALIZAR CONTROLE APÓS EXECUÇÃO
+               m_partialConfigs[configIndex].lastPartialTime = currentTime;
+               m_partialConfigs[configIndex].lastPartialPrice = currentPrice;
+               m_partialConfigs[configIndex].partialsExecuted++;
+               
+               // ✅ DEFINIR PRÓXIMO R:R NECESSÁRIO
+               if (m_partialConfigs[configIndex].partialsExecuted == 1)
+               {
+                  m_partialConfigs[configIndex].nextPartialRR = 3.0; // Segunda parcial em 3:1
+               }
+               else if (m_partialConfigs[configIndex].partialsExecuted == 2)
+               {
+                  m_partialConfigs[configIndex].nextPartialRR = 4.5; // Terceira parcial em 4.5:1
+               }
+               else
+               {
+                  m_partialConfigs[configIndex].nextPartialRR = 999.0; // Sem mais parciais
+               }
+
                if (m_logger != NULL)
                {
-                  m_logger.Info(StringFormat("Parcial executada: ticket #%d, volume %.2f",
-                                             ticket, partialVolume));
+                  m_logger.Info(StringFormat("✅ PARCIAL INTELIGENTE #%d executada: %.2f lotes em %.5f (parcial %d/3, próximo R:R: %.1f)",
+                                           ticket, partialVolume, currentPrice, 
+                                           m_partialConfigs[configIndex].partialsExecuted,
+                                           m_partialConfigs[configIndex].nextPartialRR));
                }
             }
          }
       }
+   }
+
+   // ✅ LIMPEZA PERIÓDICA
+   static datetime lastCleanup = 0;
+   if (currentTime - lastCleanup > 300) // A cada 5 minutos
+   {
+      CleanupPartialConfigs();
+      lastCleanup = currentTime;
    }
 }
 
@@ -2525,6 +2605,432 @@ bool CTradeExecutor::AutoConfigureTrailingStop(ulong ticket, string symbol)
 }
 
 //+------------------------------------------------------------------+
+//| ✅ NOVOS MÉTODOS: Sistema Inteligente de Controle de Parciais   |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Configurar controle de parciais para uma posição                 |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::ConfigurePartialControl(ulong ticket, string symbol, double entryPrice, double initialVolume)
+{
+   // Verificar se já existe configuração
+   int existingIndex = FindPartialConfigIndex(ticket);
+   if (existingIndex >= 0)
+   {
+      return true; // Já configurado
+   }
+
+   // ✅ DETECTAR TIMEFRAME AUTOMATICAMENTE
+   ENUM_TIMEFRAMES currentTimeframe = Period();
+
+   // Adicionar nova configuração
+   int size = ArraySize(m_partialConfigs);
+   ArrayResize(m_partialConfigs, size + 1);
+
+   m_partialConfigs[size].ticket = ticket;
+   m_partialConfigs[size].symbol = symbol;
+   m_partialConfigs[size].timeframe = currentTimeframe; // ✅ NOVO: Timeframe automático
+   m_partialConfigs[size].lastPartialTime = 0; // Nunca executou parcial
+   m_partialConfigs[size].lastPartialPrice = 0.0;
+   m_partialConfigs[size].partialsExecuted = 0;
+   m_partialConfigs[size].nextPartialRR = 2.0; // Primeira parcial em 2:1
+   m_partialConfigs[size].isActive = true;
+   m_partialConfigs[size].entryPrice = entryPrice;
+   m_partialConfigs[size].initialVolume = initialVolume;
+   m_partialConfigs[size].entryTime = TimeCurrent(); // ✅ NOVO: Timestamp de entrada
+
+   if (m_logger != NULL)
+   {
+      string timeframeStr = EnumToString(currentTimeframe);
+      m_logger.Info(StringFormat("✅ CONTROLE DE PARCIAIS configurado para #%d: entrada=%.5f, volume=%.2f, timeframe=%s",
+                                 ticket, entryPrice, initialVolume, timeframeStr));
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Encontrar índice da configuração de parciais                     |
+//+------------------------------------------------------------------+
+int CTradeExecutor::FindPartialConfigIndex(ulong ticket)
+{
+   int size = ArraySize(m_partialConfigs);
+   for (int i = 0; i < size; i++)
+   {
+      if (m_partialConfigs[i].ticket == ticket && m_partialConfigs[i].isActive)
+      {
+         return i;
+      }
+   }
+   return -1; // Não encontrado
+}
+
+//+------------------------------------------------------------------+
+//| Remover configuração de parciais                                 |
+//+------------------------------------------------------------------+
+void CTradeExecutor::RemovePartialConfig(int index)
+{
+   int size = ArraySize(m_partialConfigs);
+   if (index < 0 || index >= size)
+      return;
+
+   // Mover elementos para frente
+   for (int i = index; i < size - 1; i++)
+   {
+      m_partialConfigs[i] = m_partialConfigs[i + 1];
+   }
+
+   ArrayResize(m_partialConfigs, size - 1);
+}
+
+//+------------------------------------------------------------------+
+//| Limpeza de configurações inválidas                               |
+//+------------------------------------------------------------------+
+void CTradeExecutor::CleanupPartialConfigs()
+{
+   int size = ArraySize(m_partialConfigs);
+   for (int i = size - 1; i >= 0; i--)
+   {
+      // Verificar se posição ainda existe
+      if (!PositionSelectByTicket(m_partialConfigs[i].ticket))
+      {
+         if (m_logger != NULL)
+         {
+            m_logger.Debug(StringFormat("Removendo controle de parciais para posição fechada #%d",
+                                      m_partialConfigs[i].ticket));
+         }
+         RemovePartialConfig(i);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| ✅ LÓGICA INTELIGENTE: Verificar se deve tomar parcial           |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::ShouldTakePartialNowIntelligent(ulong ticket, double currentPrice)
+{
+   int configIndex = FindPartialConfigIndex(ticket);
+   if (configIndex < 0)
+   {
+      return false; // Sem configuração
+   }
+
+   if (!PositionSelectByTicket(ticket))
+   {
+      return false;
+   }
+
+   // ✅ VERIFICAR SE JÁ EXECUTOU MÁXIMO DE PARCIAIS
+   if (m_partialConfigs[configIndex].partialsExecuted >= 3)
+   {
+      return false; // Máximo 3 parciais
+   }
+
+   // ✅ CALCULAR R:R ATUAL
+   double entryPrice = m_partialConfigs[configIndex].entryPrice;
+   double stopLoss = PositionGetDouble(POSITION_SL);
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+   if (stopLoss <= 0)
+   {
+      return false; // Sem stop loss definido
+   }
+
+   double risk = MathAbs(entryPrice - stopLoss);
+   double currentReward = 0;
+
+   if (posType == POSITION_TYPE_BUY)
+   {
+      currentReward = currentPrice - entryPrice;
+   }
+   else
+   {
+      currentReward = entryPrice - currentPrice;
+   }
+
+   if (risk <= 0 || currentReward <= 0)
+   {
+      return false; // Sem lucro ou risco inválido
+   }
+
+   double currentRR = currentReward / risk;
+
+   // ✅ VERIFICAR SE ATINGIU R:R NECESSÁRIO
+   if (currentRR < m_partialConfigs[configIndex].nextPartialRR)
+   {
+      return false; // R:R insuficiente
+   }
+
+   // ✅ VERIFICAR TEMPO MÍNIMO ENTRE PARCIAIS
+   if (!IsMinimumTimeElapsed(ticket))
+   {
+      if (m_logger != NULL)
+      {
+         static datetime lastTimeLog = 0;
+         if (TimeCurrent() - lastTimeLog > 60)
+         {
+            m_logger.Debug(StringFormat("Parcial #%d aguardando tempo mínimo (R:R %.2f atingido)",
+                                      ticket, currentRR));
+            lastTimeLog = TimeCurrent();
+         }
+      }
+      return false;
+   }
+
+   // ✅ VERIFICAR DISTÂNCIA MÍNIMA
+   if (!IsMinimumDistanceAchieved(ticket, currentPrice))
+   {
+      if (m_logger != NULL)
+      {
+         static datetime lastDistLog = 0;
+         if (TimeCurrent() - lastDistLog > 60)
+         {
+            m_logger.Debug(StringFormat("Parcial #%d aguardando distância mínima (R:R %.2f atingido)",
+                                      ticket, currentRR));
+            lastDistLog = TimeCurrent();
+         }
+      }
+      return false;
+   }
+
+   // ✅ VERIFICAR SE PREÇO ESTÁ MOVENDO FAVORAVELMENTE
+   if (!IsPriceMovingFavorably(ticket, currentPrice))
+   {
+      if (m_logger != NULL)
+      {
+         static datetime lastMoveLog = 0;
+         if (TimeCurrent() - lastMoveLog > 120)
+         {
+            m_logger.Debug(StringFormat("Parcial #%d aguardando movimento favorável (R:R %.2f atingido)",
+                                      ticket, currentRR));
+            lastMoveLog = TimeCurrent();
+         }
+      }
+      return false;
+   }
+
+   // ✅ TODAS AS CONDIÇÕES ATENDIDAS
+   if (m_logger != NULL)
+   {
+      m_logger.Info(StringFormat("🎯 PARCIAL #%d APROVADA: R:R %.2f (necessário %.1f), parcial %d/3",
+                                 ticket, currentRR, m_partialConfigs[configIndex].nextPartialRR,
+                                 m_partialConfigs[configIndex].partialsExecuted + 1));
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ VOLUME INTELIGENTE: Calcular volume da parcial                |
+//+------------------------------------------------------------------+
+double CTradeExecutor::CalculatePartialVolumeIntelligent(ulong ticket, double currentVolume)
+{
+   int configIndex = FindPartialConfigIndex(ticket);
+   if (configIndex < 0)
+   {
+      return 0.0;
+   }
+
+   string symbol = m_partialConfigs[configIndex].symbol;
+   int partialsExecuted = m_partialConfigs[configIndex].partialsExecuted;
+   double initialVolume = m_partialConfigs[configIndex].initialVolume;
+
+   double partialVolume = 0.0;
+
+   // ✅ ESTRATÉGIA DE VOLUME INTELIGENTE
+   if (partialsExecuted == 0)
+   {
+      // Primeira parcial: 30% do volume inicial
+      partialVolume = initialVolume * 0.30;
+   }
+   else if (partialsExecuted == 1)
+   {
+      // Segunda parcial: 40% do volume inicial
+      partialVolume = initialVolume * 0.40;
+   }
+   else if (partialsExecuted == 2)
+   {
+      // Terceira parcial: 20% do volume inicial (deixa 10% como runner)
+      partialVolume = initialVolume * 0.20;
+   }
+   else
+   {
+      return 0.0; // Sem mais parciais
+   }
+
+   // ✅ AJUSTAR PARA STEP DE LOTE
+   double stepLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_STEP);
+   if (stepLot > 0)
+   {
+      partialVolume = MathFloor(partialVolume / stepLot) * stepLot;
+   }
+
+   // ✅ VERIFICAR VOLUME MÍNIMO
+   double minLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MIN);
+   if (partialVolume < minLot)
+   {
+      return 0.0;
+   }
+
+   // ✅ VERIFICAR SE NÃO EXCEDE VOLUME ATUAL
+   if (partialVolume >= currentVolume)
+   {
+      // Deixar pelo menos 1 lote como runner
+      partialVolume = currentVolume - minLot;
+      if (partialVolume < minLot)
+      {
+         return 0.0;
+      }
+   }
+
+   return partialVolume;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ TIMING AUTOMÁTICO: Verificar se tempo mínimo foi atingido     |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::IsMinimumTimeElapsed(ulong ticket)
+{
+   int configIndex = FindPartialConfigIndex(ticket);
+   if (configIndex < 0)
+   {
+      return false;
+   }
+
+   datetime lastPartialTime = m_partialConfigs[configIndex].lastPartialTime;
+   
+   // Se nunca executou parcial, pode executar
+   if (lastPartialTime == 0)
+   {
+      return true;
+   }
+
+   // ✅ CALCULAR TIMING AUTOMÁTICO BASEADO EM TIMEFRAME E ATIVO
+   string symbol = m_partialConfigs[configIndex].symbol;
+   ENUM_TIMEFRAMES timeframe = m_partialConfigs[configIndex].timeframe;
+   int partialNumber = m_partialConfigs[configIndex].partialsExecuted + 1; // Próxima parcial
+
+   int minTimeSeconds = CalculateAutomaticTiming(symbol, timeframe, partialNumber);
+
+   datetime currentTime = TimeCurrent();
+   bool timeElapsed = (currentTime - lastPartialTime) >= minTimeSeconds;
+
+   // ✅ LOG DETALHADO PARA MONITORAMENTO
+   if (!timeElapsed && m_logger != NULL)
+   {
+      static datetime lastLog = 0;
+      if (currentTime - lastLog > 60) // Log a cada minuto
+      {
+         // ✅ CORREÇÃO: Cast explícito para evitar warning de conversão
+         int elapsedSeconds = (int)(currentTime - lastPartialTime);
+         int remainingSeconds = minTimeSeconds - elapsedSeconds;
+         int remainingMinutes = remainingSeconds / 60;
+         
+         m_logger.Debug(StringFormat("⏰ TIMING AUTOMÁTICO #%d: aguardando %d min %d seg (parcial %d, %s %s)",
+                                   ticket, remainingMinutes, remainingSeconds % 60, 
+                                   partialNumber, symbol, EnumToString(timeframe)));
+         lastLog = currentTime;
+      }
+   }
+
+   return timeElapsed;
+}
+
+//+------------------------------------------------------------------+
+//| Verificar se distância mínima foi atingida                       |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::IsMinimumDistanceAchieved(ulong ticket, double currentPrice)
+{
+   int configIndex = FindPartialConfigIndex(ticket);
+   if (configIndex < 0)
+   {
+      return false;
+   }
+
+   double lastPartialPrice = m_partialConfigs[configIndex].lastPartialPrice;
+   
+   // Se nunca executou parcial, pode executar
+   if (lastPartialPrice == 0.0)
+   {
+      return true;
+   }
+
+   string symbol = m_partialConfigs[configIndex].symbol;
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   
+   if (point <= 0)
+   {
+      return true; // Fallback
+   }
+
+   // ✅ DISTÂNCIA MÍNIMA BASEADA NO SÍMBOLO
+   double minDistancePoints = 50; // Padrão
+   
+   if (StringFind(symbol, "WIN") >= 0)
+   {
+      minDistancePoints = 100; // 100 pontos para WIN
+   }
+   else if (StringFind(symbol, "WDO") >= 0)
+   {
+      minDistancePoints = 25; // 25 pontos para WDO
+   }
+   else if (StringFind(symbol, "BIT") >= 0)
+   {
+      minDistancePoints = 200; // 200 USD para BTC
+   }
+
+   double minDistancePrice = minDistancePoints * point;
+   double actualDistance = MathAbs(currentPrice - lastPartialPrice);
+
+   return actualDistance >= minDistancePrice;
+}
+
+//+------------------------------------------------------------------+
+//| Verificar se preço está movendo favoravelmente                   |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::IsPriceMovingFavorably(ulong ticket, double currentPrice)
+{
+   int configIndex = FindPartialConfigIndex(ticket);
+   if (configIndex < 0)
+   {
+      return false;
+   }
+
+   if (!PositionSelectByTicket(ticket))
+   {
+      return false;
+   }
+
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double lastPartialPrice = m_partialConfigs[configIndex].lastPartialPrice;
+
+   // Se nunca executou parcial, verificar movimento desde entrada
+   if (lastPartialPrice == 0.0)
+   {
+      double entryPrice = m_partialConfigs[configIndex].entryPrice;
+      
+      if (posType == POSITION_TYPE_BUY)
+      {
+         return currentPrice > entryPrice; // Preço acima da entrada
+      }
+      else
+      {
+         return currentPrice < entryPrice; // Preço abaixo da entrada
+      }
+   }
+
+   // ✅ VERIFICAR SE PREÇO MELHOROU DESDE ÚLTIMA PARCIAL
+   if (posType == POSITION_TYPE_BUY)
+   {
+      return currentPrice >= lastPartialPrice; // Preço igual ou melhor
+   }
+   else
+   {
+      return currentPrice <= lastPartialPrice; // Preço igual ou melhor
+   }
+}
+
+//+------------------------------------------------------------------+
 //| ATUALIZAÇÃO da função ManageOpenPositions para incluir breakeven |
 //+------------------------------------------------------------------+
 void CTradeExecutor::ManageOpenPositions()
@@ -2894,5 +3400,208 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
    }
    
    return success;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ SISTEMA DE TIMING AUTOMÁTICO: Implementações dos Especialistas |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Calcular timing automático baseado em timeframe, ativo e parcial |
+//+------------------------------------------------------------------+
+int CTradeExecutor::CalculateAutomaticTiming(string symbol, ENUM_TIMEFRAMES timeframe, int partialNumber)
+{
+   // ✅ FÓRMULA DOS ESPECIALISTAS: Tempo = TempoBase × MultiplcadorAtivo × MultiplicadorParcial
+   
+   int baseTimeSeconds = GetBaseTimeByTimeframe(timeframe);
+   double assetMultiplier = GetAssetMultiplier(symbol);
+   double partialMultiplier = GetPartialMultiplier(partialNumber);
+   
+   // ✅ MULTIPLICADORES ADICIONAIS PARA REFINAMENTO
+   double volatilityMultiplier = GetVolatilityMultiplier(symbol);
+   double sessionMultiplier = GetSessionMultiplier(symbol);
+   
+   // Cálculo final
+   double finalTime = baseTimeSeconds * assetMultiplier * partialMultiplier * volatilityMultiplier * sessionMultiplier;
+   
+   // Garantir mínimo de 30 segundos e máximo de 24 horas
+   int result = (int)MathMax(30, MathMin(86400, finalTime));
+   
+   // ✅ LOG PARA ANÁLISE E OTIMIZAÇÃO
+   if (m_logger != NULL)
+   {
+      static datetime lastDetailLog = 0;
+      if (TimeCurrent() - lastDetailLog > 300) // Log detalhado a cada 5 minutos
+      {
+         m_logger.Debug(StringFormat("📊 TIMING CALCULADO para %s %s parcial %d: %d seg (base:%d × ativo:%.1f × parcial:%.1f × vol:%.1f × sessão:%.1f)",
+                                   symbol, EnumToString(timeframe), partialNumber, result,
+                                   baseTimeSeconds, assetMultiplier, partialMultiplier, volatilityMultiplier, sessionMultiplier));
+         lastDetailLog = TimeCurrent();
+      }
+   }
+   
+   return result;
+}
+
+//+------------------------------------------------------------------+
+//| Obter tempo base por timeframe (recomendações de especialistas)  |
+//+------------------------------------------------------------------+
+int CTradeExecutor::GetBaseTimeByTimeframe(ENUM_TIMEFRAMES timeframe)
+{
+   switch(timeframe)
+   {
+      case PERIOD_M1:  return 120;    // 2 minutos base (movimentos ultra-rápidos)
+      case PERIOD_M3:  return 360;    // 6 minutos base (scalping avançado)
+      case PERIOD_M5:  return 600;    // 10 minutos base (movimentos rápidos)
+      case PERIOD_M15: return 1800;   // 30 minutos base (movimentos médios)
+      case PERIOD_M30: return 3600;   // 1 hora base
+      case PERIOD_H1:  return 7200;   // 2 horas base (movimentos lentos)
+      case PERIOD_H4:  return 21600;  // 6 horas base (movimentos muito lentos)
+      case PERIOD_D1:  return 86400;  // 1 dia base (swing trading)
+      default:         return 600;    // Padrão: 10 minutos
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Obter multiplicador por ativo (baseado em volatilidade)          |
+//+------------------------------------------------------------------+
+double CTradeExecutor::GetAssetMultiplier(string symbol)
+{
+   // ✅ BASEADO EM ANÁLISE DE VOLATILIDADE HISTÓRICA DOS ATIVOS
+   
+   if (StringFind(symbol, "BTC") >= 0 || StringFind(symbol, "BIT") >= 0)
+   {
+      return 0.7; // Bitcoin: muito volátil, timing mais rápido
+   }
+   else if (StringFind(symbol, "WIN") >= 0)
+   {
+      return 1.0; // WIN: volatilidade referência (padrão brasileiro)
+   }
+   else if (StringFind(symbol, "WDO") >= 0)
+   {
+      return 1.5; // Dólar: menos volátil que WIN, timing mais lento
+   }
+   else if (StringFind(symbol, "ETH") >= 0)
+   {
+      return 0.8; // Ethereum: alta volatilidade
+   }
+   else if (StringFind(symbol, "PETR") >= 0 || StringFind(symbol, "VALE") >= 0 || 
+            StringFind(symbol, "ITUB") >= 0 || StringFind(symbol, "BBDC") >= 0)
+   {
+      return 2.0; // Ações blue chips: menos voláteis
+   }
+   else if (StringFind(symbol, "USD") >= 0 || StringFind(symbol, "EUR") >= 0 || 
+            StringFind(symbol, "GBP") >= 0 || StringFind(symbol, "JPY") >= 0)
+   {
+      return 1.8; // Forex majors: movimentos mais lentos
+   }
+   else if (StringFind(symbol, "GOLD") >= 0 || StringFind(symbol, "XAUUSD") >= 0)
+   {
+      return 1.3; // Ouro: volatilidade moderada
+   }
+   else
+   {
+      return 1.2; // Outros ativos: conservador
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Obter multiplicador por número da parcial (gestão progressiva)   |
+//+------------------------------------------------------------------+
+double CTradeExecutor::GetPartialMultiplier(int partialNumber)
+{
+   // ✅ RECOMENDAÇÃO DE LARRY WILLIAMS: Timing progressivo
+   switch(partialNumber)
+   {
+      case 1: return 0.5; // 1ª parcial: mais rápida (proteção de capital)
+      case 2: return 1.0; // 2ª parcial: timing normal
+      case 3: return 1.5; // 3ª parcial: mais lenta (captura de movimento)
+      default: return 1.0;
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Obter multiplicador de volatilidade (adaptação dinâmica)         |
+//+------------------------------------------------------------------+
+double CTradeExecutor::GetVolatilityMultiplier(string symbol)
+{
+   // ✅ ANÁLISE SIMPLIFICADA DE VOLATILIDADE ATUAL
+   // Em implementação futura: usar ATR ou desvio padrão
+   
+   datetime currentTime = TimeCurrent();
+   MqlDateTime timeStruct;
+   TimeToStruct(currentTime, timeStruct);
+   
+   // Horários de maior volatilidade = timing mais rápido
+   int hour = timeStruct.hour;
+   
+   if (StringFind(symbol, "WIN") >= 0 || StringFind(symbol, "WDO") >= 0)
+   {
+      // Mercado brasileiro
+      if ((hour >= 9 && hour <= 11) || (hour >= 14 && hour <= 16))
+      {
+         return 0.8; // Horários de maior movimento = timing mais rápido
+      }
+      else if (hour >= 12 && hour <= 13)
+      {
+         return 1.3; // Almoço = menos movimento = timing mais lento
+      }
+   }
+   else if (StringFind(symbol, "BTC") >= 0)
+   {
+      // Bitcoin: 24h, mas alguns horários são mais ativos
+      if ((hour >= 8 && hour <= 10) || (hour >= 14 && hour <= 16) || (hour >= 20 && hour <= 22))
+      {
+         return 0.9; // Horários de maior atividade
+      }
+   }
+   
+   return 1.0; // Padrão
+}
+
+//+------------------------------------------------------------------+
+//| Obter multiplicador de sessão (horário de negociação)            |
+//+------------------------------------------------------------------+
+double CTradeExecutor::GetSessionMultiplier(string symbol)
+{
+   datetime currentTime = TimeCurrent();
+   MqlDateTime timeStruct;
+   TimeToStruct(currentTime, timeStruct);
+   
+   int hour = timeStruct.hour;
+   int dayOfWeek = timeStruct.day_of_week;
+   
+   // ✅ ANÁLISE POR SESSÃO DE MERCADO
+   
+   if (StringFind(symbol, "WIN") >= 0 || StringFind(symbol, "WDO") >= 0)
+   {
+      // Mercado brasileiro (9h-18h)
+      if (hour < 9 || hour > 18)
+      {
+         return 2.0; // Fora do horário = movimentos mais lentos
+      }
+      else if (hour == 9 || hour == 17)
+      {
+         return 0.7; // Abertura/fechamento = mais volátil
+      }
+   }
+   else if (StringFind(symbol, "BTC") >= 0)
+   {
+      // Bitcoin: 24h, mas fins de semana são diferentes
+      if (dayOfWeek == 0 || dayOfWeek == 6) // Domingo ou sábado
+      {
+         return 1.3; // Fins de semana = menos atividade
+      }
+   }
+   else if (StringFind(symbol, "USD") >= 0 || StringFind(symbol, "EUR") >= 0)
+   {
+      // Forex: considerar sobreposição de sessões
+      if ((hour >= 8 && hour <= 12) || (hour >= 14 && hour <= 18))
+      {
+         return 0.9; // Sobreposição de sessões = mais atividade
+      }
+   }
+   
+   return 1.0; // Padrão
 }
 
