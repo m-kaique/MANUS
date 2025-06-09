@@ -274,7 +274,7 @@ bool SetupAssets()
    {
       g_assets[index].symbol = "WINM25";
       g_assets[index].enabled = true;
-      g_assets[index].minLot = 1.0;
+      g_assets[index].minLot = 4.0;
       g_assets[index].maxLot = 100.0;
       g_assets[index].lotStep = 1.0;
       g_assets[index].tickValue = SymbolInfoDouble("WINM25", SYMBOL_TRADE_TICK_VALUE);

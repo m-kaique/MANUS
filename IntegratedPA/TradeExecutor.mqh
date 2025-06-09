@@ -110,6 +110,8 @@ private:
    bool ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE orderType,
                                double &entryPrice, double &stopLoss, double &takeProfit);
 
+   bool ClosePartialPosition(ulong position_ticket, double partial_volume);
+
 public:
    // Construtores e destrutor
    CTradeExecutor();
@@ -429,79 +431,80 @@ bool CTradeExecutor::ModifyPosition(ulong ticket, double stopLoss, double takePr
 //+------------------------------------------------------------------+
 //| Fechamento de posição                                            |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::ClosePosition(ulong ticket, double volume = 0.0)
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO CORRIGIDA: ClosePosition                              |
+//| Usa implementação oficial para fechamento total e parcial       |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
 {
-   // Verificar se trading está permitido
-   if (!m_tradeAllowed)
+   // Validar e selecionar posição
+   if(!PositionSelectByTicket(ticket))
    {
-      m_lastError = -1;
-      m_lastErrorDesc = "Trading não está habilitado";
-      m_logger.Warning(m_lastErrorDesc);
+      m_lastError = ERR_TRADE_POSITION_NOT_FOUND;
+      m_lastErrorDesc = "Posição não encontrada: " + IntegerToString(ticket);
+      m_logger.Error(m_lastErrorDesc);
       return false;
    }
-
-   // Registrar detalhes do fechamento
-   if (volume <= 0.0)
+   
+   // Obter volume atual da posição
+   double currentVolume = PositionGetDouble(POSITION_VOLUME);
+   
+   // Determinar tipo de fechamento
+   bool isFullClose = (volume <= 0 || volume >= currentVolume);
+   
+   if(isFullClose)
    {
-      m_logger.Info(StringFormat("Fechando posição #%d completamente", ticket));
-   }
-   else
-   {
-      m_logger.Info(StringFormat("Fechando posição #%d parcialmente: %.2f lotes", ticket, volume));
-   }
-
-   // Executar fechamento com retry
-   bool result = false;
-   int retries = 0;
-
-   while (retries < m_maxRetries && !result)
-   {
-      if (retries > 0)
+      // ✅ FECHAMENTO TOTAL USANDO CTrade
+      m_logger.Info(StringFormat("Fechando posição #%d completamente (%.2f lotes)", ticket, currentVolume));
+      
+      bool result = false;
+      int retries = 0;
+      
+      while(retries < m_maxRetries && !result)
       {
-         m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-         Sleep(m_retryDelay);
-      }
-
-      result = m_trade.PositionClose(ticket, (ulong)volume);
-
-      // Verificar resultado
-      if (!result)
-      {
-         m_lastError = (int)m_trade.ResultRetcode();
-         m_lastErrorDesc = "Erro no fechamento da posição: " + IntegerToString(m_lastError);
-
-         // Verificar se o erro é recuperável
-         if (!IsRetryableError(m_lastError))
+         if(retries > 0)
          {
-            m_logger.Error(m_lastErrorDesc);
-            return false;
+            m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
+            Sleep(m_retryDelay);
          }
+         
+         result = m_trade.PositionClose(ticket);
+         
+         if(!result)
+         {
+            m_lastError = (int)m_trade.ResultRetcode();
+            m_lastErrorDesc = "Erro no fechamento da posição: " + IntegerToString(m_lastError);
+            
+            if(!IsRetryableError(m_lastError))
+            {
+               m_logger.Error(StringFormat("Erro não recuperável: %d", m_lastError));
+               break;
+            }
+         }
+         
+         retries++;
       }
-
-      retries++;
-   }
-
-   // Verificar resultado final
-   if (result)
-   {
-      m_logger.Info(StringFormat("Posição #%d fechada com sucesso", ticket));
-
-      // add to json
-      double close_price = HistoryDealGetDouble(ticket, DEAL_PRICE);
-      double profit      = HistoryDealGetDouble(ticket, DEAL_PROFIT);  
-      string reason = HistoryDealGetString(ticket, DEAL_COMMENT);
-      //
-      m_jsonlog.CloseOrder(ticket, close_price, profit, reason);
-
-      return true;
+      
+      if(result)
+      {
+         m_logger.Info(StringFormat("✅ POSIÇÃO #%d FECHADA COMPLETAMENTE", ticket));
+      }
+      else
+      {
+         m_logger.Error(StringFormat("❌ FALHA NO FECHAMENTO da posição #%d: %s", ticket, m_lastErrorDesc));
+      }
+      
+      return result;
    }
    else
    {
-      m_logger.Error(StringFormat("Falha no fechamento da posição #%d após %d tentativas. Último erro: %d", ticket, m_maxRetries, m_lastError));
-      return false;
+      // ✅ FECHAMENTO PARCIAL USANDO OrderSend OFICIAL
+      m_logger.Info(StringFormat("Fechando posição #%d parcialmente: %.2f de %.2f lotes", 
+                                ticket, volume, currentVolume));
+      
+      return ClosePartialPosition(ticket, volume);
    }
 }
-
 //+------------------------------------------------------------------+
 //| Fechamento de todas as posições                                  |
 //+------------------------------------------------------------------+
@@ -913,25 +916,36 @@ bool CTradeExecutor::ApplyMATrailingStop(ulong ticket, string symbol, ENUM_TIMEF
 //+------------------------------------------------------------------+
 //| Verificar se o erro é recuperável                                |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::IsRetryableError(int errorCode)
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: Verificar Erros Recuperáveis               |
+//| Determina se vale a pena tentar novamente                       |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::IsRetryableError(int error_code)
 {
-   switch (errorCode)
+   switch(error_code)
    {
-   case TRADE_ERROR_SERVER_BUSY:
-   case TRADE_ERROR_NO_CONNECTION:
-   case TRADE_ERROR_TRADE_TIMEOUT:
-   case TRADE_ERROR_PRICE_CHANGED:
-   case TRADE_ERROR_OFF_QUOTES:
-   case TRADE_ERROR_BROKER_BUSY:
-   case TRADE_ERROR_REQUOTE:
-   case TRADE_ERROR_TOO_MANY_REQUESTS:
-   case TRADE_ERROR_TRADE_CONTEXT_BUSY:
-      return true;
+      case TRADE_RETCODE_REQUOTE:          // Requote
+      case TRADE_RETCODE_CONNECTION:       // Sem conexão
+      case TRADE_RETCODE_PRICE_CHANGED:    // Preço mudou
+      case TRADE_RETCODE_TIMEOUT:          // Timeout
+      case TRADE_RETCODE_PRICE_OFF:        // Preço inválido
+      case TRADE_RETCODE_REJECT:           // Requisição rejeitada
+      case TRADE_RETCODE_TOO_MANY_REQUESTS: // Muitas requisições
+         return true;
+         
+      case TRADE_RETCODE_INVALID_VOLUME:   // Volume inválido
+      case TRADE_RETCODE_INVALID_PRICE:    // Preço inválido
+      case TRADE_RETCODE_INVALID_STOPS:    // Stops inválidos
+      case TRADE_RETCODE_TRADE_DISABLED:   // Trading desabilitado
+      case TRADE_RETCODE_MARKET_CLOSED:    // Mercado fechado
+      case TRADE_RETCODE_NO_MONEY:         // Sem dinheiro
+      case TRADE_RETCODE_POSITION_CLOSED:  // Posição já fechada
+         return false;
+         
+      default:
+         return false;
    }
-
-   return false;
 }
-
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO CORRIGIDA CRÍTICA: CalculateFixedTrailingStop         |
 //| PROBLEMA: return 0.0 parava trailing permanentemente            |
@@ -2593,3 +2607,165 @@ bool CTradeExecutor::ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE order
 
    return true;
 }
+
+/////////////////////////////////////////////////////////////////
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO CORRETA: ClosePartialPosition                         |
+//| Implementação oficial MQL5 para fechamento de parciais          |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_volume)
+{
+   // Validar e selecionar posição
+   if(!PositionSelectByTicket(position_ticket))
+   {
+      m_lastError = ERR_TRADE_POSITION_NOT_FOUND;
+      m_lastErrorDesc = "Posição não encontrada: " + IntegerToString(position_ticket);
+      m_logger.Error(m_lastErrorDesc);
+      return false;
+   }
+   
+   // Obter informações da posição
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   double currentVolume = PositionGetDouble(POSITION_VOLUME);
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   
+   // Validar volume parcial
+   if(partial_volume <= 0)
+   {
+      m_lastError = ERR_TRADE_WRONG_PROPERTY;
+      m_lastErrorDesc = "Volume inválido para fechamento parcial: " + DoubleToString(partial_volume, 2);
+      m_logger.Error(m_lastErrorDesc);
+      return false;
+   }
+   
+   // Se volume >= volume total, fechar posição inteira
+   if(partial_volume >= currentVolume)
+   {
+      m_logger.Info(StringFormat("Volume parcial (%.2f) >= volume total (%.2f), fechando posição inteira #%d", 
+                                partial_volume, currentVolume, position_ticket));
+      return m_trade.PositionClose(position_ticket);
+   }
+   
+   // ✅ IMPLEMENTAÇÃO OFICIAL MQL5 PARA FECHAMENTO PARCIAL
+   m_logger.Info(StringFormat("Executando fechamento parcial: %.2f de %.2f lotes (posição #%d)", 
+                             partial_volume, currentVolume, position_ticket));
+   
+   // Obter preço atual
+   MqlTick tick;
+   if(!SymbolInfoTick(symbol, tick))
+   {
+      m_lastError = ERR_TRADE_DEAL_NOT_FOUND;
+      m_lastErrorDesc = "Falha ao obter tick para " + symbol;
+      m_logger.Error(m_lastErrorDesc);
+      return false;
+   }
+   
+   // ✅ PREPARAR ESTRUTURAS OFICIAIS MQL5
+   MqlTradeRequest request = {};
+   MqlTradeResult result = {};
+   
+   // ✅ CONFIGURAR REQUISIÇÃO DE FECHAMENTO PARCIAL
+   request.action = TRADE_ACTION_DEAL;           // ✅ Ação oficial para fechamento
+   request.position = position_ticket;           // ✅ Ticket da posição a fechar
+   request.symbol = symbol;                      // ✅ Símbolo da posição
+   request.volume = partial_volume;              // ✅ Volume parcial a fechar
+   request.magic = MAGIC_NUMBER;                      // ✅ Magic number
+   request.comment = "Fechamento Parcial";      // ✅ Comentário
+   request.deviation = 3;                        // ✅ Desvio permitido
+   
+   // ✅ DETERMINAR TIPO DE ORDEM PARA FECHAMENTO
+   if(posType == POSITION_TYPE_BUY)
+   {
+      request.type = ORDER_TYPE_SELL;            // ✅ Vender para fechar compra
+      request.price = tick.bid;                  // ✅ Preço de venda
+   }
+   else
+   {
+      request.type = ORDER_TYPE_BUY;             // ✅ Comprar para fechar venda
+      request.price = tick.ask;                  // ✅ Preço de compra
+   }
+   
+   // ✅ EXECUTAR FECHAMENTO PARCIAL COM RETRY
+   bool success = false;
+   int retries = 0;
+   
+   while(retries < m_maxRetries && !success)
+   {
+      if(retries > 0)
+      {
+         m_logger.Warning(StringFormat("Tentativa %d de %d para fechamento parcial", retries + 1, m_maxRetries));
+         Sleep(m_retryDelay);
+         
+         // Atualizar preço para retry
+         if(!SymbolInfoTick(symbol, tick))
+         {
+            m_logger.Error("Falha ao atualizar tick para retry");
+            break;
+         }
+         request.price = (posType == POSITION_TYPE_BUY) ? tick.bid : tick.ask;
+      }
+      
+      // ✅ EXECUTAR ORDEM DE FECHAMENTO PARCIAL
+      success = OrderSend(request, result);
+      
+      if(!success)
+      {
+         m_lastError = (int)result.retcode;
+         m_lastErrorDesc = "Erro no fechamento parcial: " + IntegerToString(result.retcode);
+         
+         // Log detalhado do erro
+         m_logger.Error(StringFormat("Erro OrderSend: retcode=%d, deal=%d, order=%d", 
+                                   result.retcode, result.deal, result.order));
+         
+         // Verificar se erro é recuperável
+         if(!IsRetryableError(result.retcode))
+         {
+            m_logger.Error(StringFormat("Erro não recuperável no fechamento parcial: %d", result.retcode));
+            break;
+         }
+      }
+      else
+      {
+         // ✅ SUCESSO - LOG DETALHADO
+         m_logger.Info(StringFormat("✅ FECHAMENTO PARCIAL EXECUTADO: %.2f lotes da posição #%d", 
+                                  partial_volume, position_ticket));
+         m_logger.Info(StringFormat("Deal: #%d, Order: #%d, Volume: %.2f, Preço: %.5f", 
+                                  result.deal, result.order, result.volume, result.price));
+      }
+      
+      retries++;
+   }
+   
+   // ✅ VALIDAR RESULTADO E VOLUME RESTANTE
+   if(success)
+   {
+      // Verificar volume restante na posição
+      if(PositionSelectByTicket(position_ticket))
+      {
+         double remainingVolume = PositionGetDouble(POSITION_VOLUME);
+         double expectedRemaining = currentVolume - partial_volume;
+         
+         m_logger.Info(StringFormat("Volume restante na posição #%d: %.2f lotes (esperado: %.2f)", 
+                                  position_ticket, remainingVolume, expectedRemaining));
+         
+         // Validar se volume restante está correto (com tolerância)
+         if(MathAbs(remainingVolume - expectedRemaining) > 0.01)
+         {
+            m_logger.Warning(StringFormat("⚠️ Volume restante diverge do esperado: %.2f vs %.2f", 
+                                        remainingVolume, expectedRemaining));
+         }
+      }
+      else
+      {
+         m_logger.Info(StringFormat("Posição #%d fechada completamente", position_ticket));
+      }
+   }
+   else
+   {
+      m_logger.Error(StringFormat("❌ FALHA NO FECHAMENTO PARCIAL da posição #%d: %s", 
+                                position_ticket, m_lastErrorDesc));
+   }
+   
+   return success;
+}
+

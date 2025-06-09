@@ -8,6 +8,12 @@
 #property version "1.00"
 
 //+------------------------------------------------------------------+
+//| Include Guards para evitar múltiplas inclusões                   |
+//+------------------------------------------------------------------+
+#ifndef STRUCTURES_MQH
+#define STRUCTURES_MQH
+
+//+------------------------------------------------------------------+
 //| Enumeração para Fases de Mercado                                 |
 //+------------------------------------------------------------------+
 enum MARKET_PHASE
@@ -42,6 +48,143 @@ enum ENUM_LOG_LEVEL
 };
 
 //+------------------------------------------------------------------+
+//| ✅ SISTEMA DE PARCIAIS UNIVERSAL - Enumerações                  |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Enumeração para Tipos de Ativo                                   |
+//+------------------------------------------------------------------+
+#ifndef ASSET_TYPE_DEFINED
+#define ASSET_TYPE_DEFINED
+enum ASSET_TYPE
+{
+   ASSET_FRACTIONAL,    // Permite lotes fracionários (ex: EURUSD, BTCUSD)
+   ASSET_INTEGER,       // Apenas lotes inteiros (ex: WIN$, WDO$)
+   ASSET_LARGE_LOT,     // Lotes grandes (ex: ações em lotes de 100)
+   ASSET_UNKNOWN        // Tipo não determinado
+};
+#endif
+
+//+------------------------------------------------------------------+
+//| Enumeração para Estratégias de Parciais                          |
+//+------------------------------------------------------------------+
+#ifndef PARTIAL_STRATEGY_DEFINED
+#define PARTIAL_STRATEGY_DEFINED
+enum PARTIAL_STRATEGY
+{
+   PARTIAL_STRATEGY_ORIGINAL,    // Usar percentuais originais
+   PARTIAL_STRATEGY_SCALED,      // Escalar volume para permitir parciais
+   PARTIAL_STRATEGY_ADAPTIVE,    // Adaptar percentuais para lotes inteiros
+   PARTIAL_STRATEGY_CONDITIONAL, // Usar parciais apenas se viável
+   PARTIAL_STRATEGY_DISABLED     // Desabilitar parciais
+};
+#endif
+
+//+------------------------------------------------------------------+
+//| ✅ SISTEMA DE PARCIAIS UNIVERSAL - Estruturas                   |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
+//| Estrutura para Características de Lote                           |
+//+------------------------------------------------------------------+
+struct LotCharacteristics
+{
+   double minLot;                    // Lote mínimo
+   double maxLot;                    // Lote máximo
+   double stepLot;                   // Step de incremento
+   ASSET_TYPE type;                  // Tipo de ativo
+   bool supportsPartials;            // Suporta parciais efetivamente
+   double minVolumeForPartials;      // Volume mínimo para parciais
+   PARTIAL_STRATEGY recommendedStrategy; // Estratégia recomendada
+   
+   // Construtor
+   LotCharacteristics()
+   {
+      minLot = 0.01;
+      maxLot = 100.0;
+      stepLot = 0.01;
+      type = ASSET_UNKNOWN;
+      supportsPartials = false;
+      minVolumeForPartials = 0.0;
+      recommendedStrategy = PARTIAL_STRATEGY_ORIGINAL;
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Estrutura para Configuração de Parciais Adaptativas             |
+//+------------------------------------------------------------------+
+struct AdaptivePartialConfig
+{
+   bool enabled;                     // Parciais habilitadas
+   PARTIAL_STRATEGY strategy;        // Estratégia a ser usada
+   double originalPercentages[10];   // Percentuais originais
+   double adaptedPercentages[10];    // Percentuais adaptados
+   double originalVolume;            // Volume original calculado
+   double finalVolume;               // Volume final a ser usado
+   int numPartials;                  // Número de parciais
+   bool volumeWasScaled;             // Indica se volume foi escalado
+   double scalingFactor;             // Fator de escalonamento aplicado
+   string reason;                    // Razão para a estratégia escolhida
+   
+   // Construtor
+   AdaptivePartialConfig()
+   {
+      enabled = false;
+      strategy = PARTIAL_STRATEGY_ORIGINAL;
+      originalVolume = 0.0;
+      finalVolume = 0.0;
+      numPartials = 0;
+      volumeWasScaled = false;
+      scalingFactor = 1.0;
+      reason = "";
+      
+      for (int i = 0; i < 10; i++)
+      {
+         originalPercentages[i] = 0.0;
+         adaptedPercentages[i] = 0.0;
+      }
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Estrutura para Métricas de Performance de Parciais              |
+//+------------------------------------------------------------------+
+struct PartialMetrics
+{
+   int totalOperations;              // Total de operações
+   int operationsWithPartials;       // Operações com parciais
+   int operationsScaled;             // Operações com volume escalado
+   int operationsAdapted;            // Operações com parciais adaptadas
+   int operationsDisabled;           // Operações com parciais desabilitadas
+   
+   double totalVolumeOriginal;       // Volume total original
+   double totalVolumeFinal;          // Volume total final
+   double avgVolumeIncrease;         // Aumento médio de volume (%)
+   double avgPartialEfficiency;      // Eficiência média das parciais
+   
+   datetime lastReset;               // Última reinicialização das métricas
+   
+   // Construtor
+   PartialMetrics()
+   {
+      totalOperations = 0;
+      operationsWithPartials = 0;
+      operationsScaled = 0;
+      operationsAdapted = 0;
+      operationsDisabled = 0;
+      totalVolumeOriginal = 0.0;
+      totalVolumeFinal = 0.0;
+      avgVolumeIncrease = 0.0;
+      avgPartialEfficiency = 0.0;
+      lastReset = TimeCurrent();
+   }
+};
+
+//+------------------------------------------------------------------+
+//| ✅ ESTRUTURAS ORIGINAIS MANTIDAS                                |
+//+------------------------------------------------------------------+
+
+//+------------------------------------------------------------------+
 //| Estrutura para Parâmetros de Ativos                              |
 //+------------------------------------------------------------------+
 struct AssetParams
@@ -57,6 +200,15 @@ struct AssetParams
    double defaultTakeProfit;                // Take profit padrão em pontos
    double riskPercentage;                   // Percentual de risco por operação
    bool isActive;                           // Indica se o ativo está ativo para operações
+
+   // ✅ NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS
+   PARTIAL_STRATEGY partialStrategy;        // Estratégia de parciais
+   double minVolumeForPartials;             // Volume mínimo para parciais
+   bool allowVolumeScaling;                 // Permitir escalonamento de volume
+   double maxScalingFactor;                 // Fator máximo de escalonamento
+   ASSET_TYPE assetType;                    // Tipo de ativo detectado
+   LotCharacteristics lotChar;              // Características de lote
+   AdaptivePartialConfig lastPartialConfig; // Última configuração aplicada
 
    // Construtor com valores padrão
    AssetParams()
@@ -74,6 +226,13 @@ struct AssetParams
       defaultTakeProfit = 0.0;
       riskPercentage = 1.0;
       isActive = false;
+      
+      // ✅ INICIALIZAR NOVOS CAMPOS
+      partialStrategy = PARTIAL_STRATEGY_ORIGINAL;
+      minVolumeForPartials = 0.0;
+      allowVolumeScaling = false;
+      maxScalingFactor = 3.0;
+      assetType = ASSET_UNKNOWN;
    }
 };
 
@@ -209,6 +368,45 @@ struct AssetConfig
    double partialVolumes[3];
    bool historyAvailable; // Flag para indicar se o histórico está disponível
    int minRequiredBars;   // Mínimo de barras necessárias para análise
+   
+   // ✅ NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS
+   PARTIAL_STRATEGY partialStrategy;        // Estratégia de parciais
+   double minVolumeForPartials;             // Volume mínimo para parciais
+   bool allowVolumeScaling;                 // Permitir escalonamento de volume
+   double maxScalingFactor;                 // Fator máximo de escalonamento
+   ASSET_TYPE assetType;                    // Tipo de ativo detectado
+   LotCharacteristics lotChar;              // Características de lote
+   AdaptivePartialConfig lastPartialConfig; // Última configuração aplicada
+   
+   // Construtor
+   AssetConfig()
+   {
+      symbol = "";
+      enabled = false;
+      minLot = 0.01;
+      maxLot = 100.0;
+      lotStep = 0.01;
+      tickValue = 0.0;
+      digits = 5;
+      riskPercentage = 1.0;
+      usePartials = false;
+      historyAvailable = false;
+      minRequiredBars = 100;
+      
+      // Inicializar arrays
+      for (int i = 0; i < 3; i++)
+      {
+         partialLevels[i] = 0.0;
+         partialVolumes[i] = 0.0;
+      }
+      
+      // ✅ INICIALIZAR NOVOS CAMPOS
+      partialStrategy = PARTIAL_STRATEGY_ORIGINAL;
+      minVolumeForPartials = 0.0;
+      allowVolumeScaling = false;
+      maxScalingFactor = 3.0;
+      assetType = ASSET_UNKNOWN;
+   }
 };
 
 //+------------------------------------------------------------------+
@@ -249,3 +447,32 @@ struct BreakevenConfig
    bool wasTriggered;                 // Se já foi movido para breakeven
    datetime configTime;               // Quando foi configurado
 };
+
+//+------------------------------------------------------------------+
+//| ✅ ESTRUTURA PARA CONFIGURAÇÃO DE TRAILING STOP                 |
+//+------------------------------------------------------------------+
+struct TrailingStopConfig
+{
+   ulong ticket;                      // Ticket da posição
+   string symbol;                     // Símbolo
+   double trailingDistance;           // Distância do trailing em pontos
+   double minProfit;                  // Lucro mínimo para ativar trailing
+   bool isActive;                     // Se trailing está ativo
+   double lastStopLoss;               // Último stop loss definido
+   datetime configTime;               // Quando foi configurado
+   
+   // Construtor
+   TrailingStopConfig()
+   {
+      ticket = 0;
+      symbol = "";
+      trailingDistance = 0.0;
+      minProfit = 0.0;
+      isActive = false;
+      lastStopLoss = 0.0;
+      configTime = 0;
+   }
+};
+
+#endif // STRUCTURES_MQH
+
