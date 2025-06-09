@@ -107,6 +107,9 @@ private:
 
    void ManageBreakevens();
 
+   // ✅ NOVO MÉTODO: Verificar se breakeven foi acionado
+   bool IsBreakevenTriggered(ulong ticket);
+
    bool ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE orderType,
                                double &entryPrice, double &stopLoss, double &takeProfit);
 
@@ -351,12 +354,17 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       ulong ticket = m_trade.ResultOrder();
       m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", ticket));
 
-      // CONFIGURAR BREAKEVEN AUTOMATICAMENTE
-      if (ticket > 0)
+   // ✅ CORREÇÃO CRÍTICA: Configurar APENAS breakeven inicialmente
+   // Trailing será configurado automaticamente após breakeven ser acionado
+   if (ticket > 0)
+   {
+      AutoConfigureBreakeven(ticket, request.symbol);
+      
+      if (m_logger != NULL)
       {
-         AutoConfigureBreakeven(ticket, request.symbol);
-         AutoConfigureTrailingStop(ticket, request.symbol);
+         m_logger.Info(StringFormat("Breakeven configurado para #%d. Trailing será ativado após breakeven.", ticket));
       }
+   }
 
       return true;
    }
@@ -948,8 +956,7 @@ bool CTradeExecutor::IsRetryableError(int error_code)
 }
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO CORRIGIDA CRÍTICA: CalculateFixedTrailingStop         |
-//| PROBLEMA: return 0.0 parava trailing permanentemente            |
-//| SOLUÇÃO: return currentStopLoss pausa temporariamente           |
+//| CORREÇÃO: Remove proteção excessiva que bloqueava trailing      |
 //+------------------------------------------------------------------+
 double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoints)
 {
@@ -976,57 +983,81 @@ double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoin
       return 0.0;
    }
 
-   // ✅ CORREÇÃO: Usar valores configurados diretamente (não forçar mínimos)
+   // ✅ CORREÇÃO: Usar valores configurados diretamente
    double adjustedPoints = fixedPoints;
    double stopDistance = adjustedPoints * point;
    double newStopLoss = 0.0;
+
+   // ✅ VERIFICAR SE BREAKEVEN FOI ACIONADO
+   bool breakevenTriggered = IsBreakevenTriggered(ticket);
 
    if (posType == POSITION_TYPE_BUY)
    {
       newStopLoss = currentPrice - stopDistance;
 
-      // ✅ CORREÇÃO CRÍTICA: Proteção inteligente que NÃO para permanentemente
-      double minSafeSL = entryPrice * 0.98; // Máximo 2% de perda da entrada
-      newStopLoss = MathMax(newStopLoss, minSafeSL);
-      
-      // ✅ CORREÇÃO CRÍTICA: NUNCA mover SL para trás (apenas para frente)
-      newStopLoss = MathMax(newStopLoss, currentStopLoss);
-
-      // ✅ CORREÇÃO CRÍTICA: Verificação mais inteligente
-      // Só pausar se prejuízo REAL > 2% (não 0.5% como antes)
-      if (currentPrice < entryPrice * 0.98) // Apenas se perda > 2%
+      // ✅ CORREÇÃO CRÍTICA: Lógica diferente ANTES e APÓS breakeven
+      if (!breakevenTriggered)
       {
+         // ANTES do breakeven: proteção normal
+         double minSafeSL = entryPrice * 0.98; // Máximo 2% de perda
+         newStopLoss = MathMax(newStopLoss, minSafeSL);
+      }
+      else
+      {
+         // ✅ APÓS breakeven: SL nunca pode ir abaixo da entrada
+         newStopLoss = MathMax(newStopLoss, entryPrice);
+         
          if (m_logger != NULL)
          {
-            m_logger.Warning(StringFormat("Trailing pausado TEMPORARIAMENTE para #%d: prejuízo %.2f%% detectado",
-                                        ticket, ((entryPrice - currentPrice) / entryPrice) * 100));
+            static datetime lastBreakevenLog = 0;
+            if (TimeCurrent() - lastBreakevenLog > 300) // A cada 5 minutos
+            {
+               m_logger.Debug(StringFormat("Trailing #%d PÓS-BREAKEVEN: SL mínimo = entrada (%.5f)", 
+                                         ticket, entryPrice));
+               lastBreakevenLog = TimeCurrent();
+            }
          }
-         // ✅ CRÍTICO: RETORNAR SL ATUAL (não 0.0) - permite reativação
-         return currentStopLoss;
       }
+      
+      // ✅ SEMPRE: NUNCA mover SL para trás
+      newStopLoss = MathMax(newStopLoss, currentStopLoss);
+
+      // ✅ CORREÇÃO CRÍTICA: Remover verificação que bloqueava trailing
+      // A verificação de prejuízo foi removida - trailing sempre funciona
    }
    else if (posType == POSITION_TYPE_SELL)
    {
       newStopLoss = currentPrice + stopDistance;
 
-      // ✅ CORREÇÃO CRÍTICA: Proteção inteligente para vendas
-      double maxSafeSL = entryPrice * 1.02; // Máximo 2% de perda da entrada
-      newStopLoss = MathMin(newStopLoss, maxSafeSL);
-      
-      // ✅ CORREÇÃO CRÍTICA: NUNCA mover SL para trás
-      newStopLoss = MathMin(newStopLoss, currentStopLoss);
-
-      // ✅ CORREÇÃO CRÍTICA: Verificação mais inteligente para vendas
-      if (currentPrice > entryPrice * 1.02) // Apenas se perda > 2%
+      // ✅ CORREÇÃO CRÍTICA: Lógica diferente ANTES e APÓS breakeven
+      if (!breakevenTriggered)
       {
+         // ANTES do breakeven: proteção normal
+         double maxSafeSL = entryPrice * 1.02; // Máximo 2% de perda
+         newStopLoss = MathMin(newStopLoss, maxSafeSL);
+      }
+      else
+      {
+         // ✅ APÓS breakeven: SL nunca pode ir acima da entrada
+         newStopLoss = MathMin(newStopLoss, entryPrice);
+         
          if (m_logger != NULL)
          {
-            m_logger.Warning(StringFormat("Trailing pausado TEMPORARIAMENTE para #%d: prejuízo %.2f%% detectado",
-                                        ticket, ((currentPrice - entryPrice) / entryPrice) * 100));
+            static datetime lastBreakevenLog = 0;
+            if (TimeCurrent() - lastBreakevenLog > 300) // A cada 5 minutos
+            {
+               m_logger.Debug(StringFormat("Trailing #%d PÓS-BREAKEVEN: SL máximo = entrada (%.5f)", 
+                                         ticket, entryPrice));
+               lastBreakevenLog = TimeCurrent();
+            }
          }
-         // ✅ CRÍTICO: RETORNAR SL ATUAL (não 0.0) - permite reativação
-         return currentStopLoss;
       }
+      
+      // ✅ SEMPRE: NUNCA mover SL para trás
+      newStopLoss = MathMin(newStopLoss, currentStopLoss);
+
+      // ✅ CORREÇÃO CRÍTICA: Remover verificação que bloqueava trailing
+      // A verificação de prejuízo foi removida - trailing sempre funciona
    }
    else
    {
@@ -1035,7 +1066,7 @@ double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoin
 
    newStopLoss = NormalizeDouble(newStopLoss, digits);
 
-   // ✅ ADICIONADO: Log detalhado para monitoramento crítico
+   // ✅ ADICIONADO: Log detalhado para monitoramento
    if (m_logger != NULL)
    {
       double profitPoints = 0;
@@ -1048,8 +1079,14 @@ double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoin
          profitPoints = (entryPrice - currentPrice) / point;
       }
       
-      m_logger.Debug(StringFormat("Trailing #%d: preço=%.5f, lucro=%.1fpts, SL_atual=%.5f, SL_novo=%.5f",
-                                ticket, currentPrice, profitPoints, currentStopLoss, newStopLoss));
+      static datetime lastDetailLog = 0;
+      if (TimeCurrent() - lastDetailLog > 60) // A cada minuto
+      {
+         m_logger.Debug(StringFormat("Trailing #%d: preço=%.5f, lucro=%.1fpts, SL_atual=%.5f, SL_novo=%.5f, breakeven=%s",
+                                   ticket, currentPrice, profitPoints, currentStopLoss, newStopLoss,
+                                   breakevenTriggered ? "SIM" : "NÃO"));
+         lastDetailLog = TimeCurrent();
+      }
    }
 
    return newStopLoss;
@@ -1494,6 +1531,32 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
       return false;
    }
 
+   // ✅ CORREÇÃO CRÍTICA: Verificar se breakeven foi acionado PRIMEIRO
+   if (!IsBreakevenTriggered(ticket))
+   {
+      if (m_logger != NULL)
+      {
+         static datetime lastBreakevenLog = 0;
+         if (TimeCurrent() - lastBreakevenLog > 300) // A cada 5 minutos
+         {
+            m_logger.Debug(StringFormat("Trailing #%d AGUARDANDO breakeven ser acionado primeiro", ticket));
+            lastBreakevenLog = TimeCurrent();
+         }
+      }
+      return false; // ❌ NÃO permitir trailing antes do breakeven
+   }
+
+   // ✅ ADICIONADO: Log quando trailing é liberado após breakeven
+   if (m_logger != NULL)
+   {
+      static datetime lastReleaseLog = 0;
+      if (TimeCurrent() - lastReleaseLog > 300) // A cada 5 minutos
+      {
+         m_logger.Info(StringFormat("Trailing #%d LIBERADO: breakeven já foi acionado", ticket));
+         lastReleaseLog = TimeCurrent();
+      }
+   }
+
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    double stopLoss = PositionGetDouble(POSITION_SL);
@@ -1644,8 +1707,7 @@ double CTradeExecutor::CalculateNewTrailingStop(int configIndex)
 
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO CORRIGIDA: ShouldUpdateStopLoss                       |
-//| PROBLEMA: Valores de melhoria mínima muito altos (50 pontos WIN)|
-//| SOLUÇÃO: Reduzir para 15 pontos WIN, 2 pontos WDO, 50 USD BTC   |
+//| CORREÇÃO: Valores de melhoria reduzidos após breakeven          |
 //+------------------------------------------------------------------+
 bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
 {
@@ -1657,58 +1719,69 @@ bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
    double currentStopLoss = PositionGetDouble(POSITION_SL);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    string symbol = m_trailingConfigs[configIndex].symbol;
+   ulong ticket = m_trailingConfigs[configIndex].ticket;
 
-   // ✅ VALORES CORRIGIDOS - Redução significativa para permitir atualizações contínuas
+   // ✅ VERIFICAR SE BREAKEVEN FOI ACIONADO
+   bool breakevenTriggered = IsBreakevenTriggered(ticket);
+
+   // ✅ CORREÇÃO CRÍTICA: Valores diferentes ANTES e APÓS breakeven
    double minImprovement = 0;
 
    if (StringFind(symbol, "WIN") >= 0)
    {
-      minImprovement = 15; // ✅ CORRIGIDO: 50 → 15 pontos (70% redução)
+      minImprovement = breakevenTriggered ? 5 : 15; // ✅ Reduzido após breakeven
    }
    else if (StringFind(symbol, "WDO") >= 0)
    {
-      minImprovement = 2;  // ✅ CORRIGIDO: 3 → 2 pontos (33% redução)
+      minImprovement = breakevenTriggered ? 1 : 2;  // ✅ Reduzido após breakeven
    }
    else if (StringFind(symbol, "BIT") >= 0)
    {
-      minImprovement = 50; // ✅ CORRIGIDO: 100 → 50 USD (50% redução)
+      minImprovement = breakevenTriggered ? 25 : 50; // ✅ Reduzido após breakeven
    }
    else
    {
-      minImprovement = SymbolInfoDouble(symbol, SYMBOL_POINT) * 10; // 10 pontos padrão
+      minImprovement = breakevenTriggered ? 5 : 10;  // ✅ Padrão reduzido após breakeven
    }
 
-   // ✅ ADICIONADO: Log detalhado para debug e monitoramento
-   if (m_logger != NULL)
-   {
-      double improvement = 0;
-      if (posType == POSITION_TYPE_BUY)
-      {
-         improvement = newStopLoss - currentStopLoss;
-      }
-      else
-      {
-         improvement = currentStopLoss - newStopLoss;
-      }
-      
-      bool shouldUpdate = (improvement >= minImprovement);
-      
-      m_logger.Debug(StringFormat("ShouldUpdateStopLoss #%d: melhoria=%.1f, mínimo=%.1f, aprovado=%s",
-                                m_trailingConfigs[configIndex].ticket,
-                                improvement, minImprovement,
-                                shouldUpdate ? "SIM" : "NÃO"));
-   }
+   // Verificar se há melhoria suficiente
+   double improvement = 0;
+   bool isImprovement = false;
 
-   // Verificar se há melhoria significativa
    if (posType == POSITION_TYPE_BUY)
    {
-      return (newStopLoss > currentStopLoss + minImprovement);
+      if (newStopLoss > currentStopLoss)
+      {
+         improvement = (newStopLoss - currentStopLoss) / SymbolInfoDouble(symbol, SYMBOL_POINT);
+         isImprovement = (improvement >= minImprovement);
+      }
    }
    else
    {
-      return (newStopLoss < currentStopLoss - minImprovement);
+      if (newStopLoss < currentStopLoss)
+      {
+         improvement = (currentStopLoss - newStopLoss) / SymbolInfoDouble(symbol, SYMBOL_POINT);
+         isImprovement = (improvement >= minImprovement);
+      }
    }
+
+   // ✅ ADICIONADO: Log detalhado da decisão
+   if (m_logger != NULL)
+   {
+      static datetime lastDecisionLog = 0;
+      if (TimeCurrent() - lastDecisionLog > 120) // A cada 2 minutos
+      {
+         m_logger.Debug(StringFormat("Decisão trailing #%d: melhoria=%.1f, mínimo=%.1f, breakeven=%s, atualizar=%s",
+                                   ticket, improvement, minImprovement, 
+                                   breakevenTriggered ? "SIM" : "NÃO",
+                                   isImprovement ? "SIM" : "NÃO"));
+         lastDecisionLog = TimeCurrent();
+      }
+   }
+
+   return isImprovement;
 }
+
 //+------------------------------------------------------------------+
 //| Gerenciar parciais (chamado a cada tick)                         |
 //+------------------------------------------------------------------+
@@ -2183,9 +2256,8 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
       return false;
    }
 
-   BreakevenConfig config = m_breakevenConfigs[configIndex];
-
-   if (!PositionSelectByTicket(config.ticket))
+   // ✅ CORREÇÃO MQL5: Acessar diretamente pelo índice (sem referência)
+   if (!PositionSelectByTicket(m_breakevenConfigs[configIndex].ticket))
    {
       return false;
    }
@@ -2194,19 +2266,19 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
    double takeProfit = PositionGetDouble(POSITION_TP);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
 
-   double point = SymbolInfoDouble(config.symbol, SYMBOL_POINT);
-   int digits = (int)SymbolInfoInteger(config.symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(m_breakevenConfigs[configIndex].symbol, SYMBOL_POINT);
+   int digits = (int)SymbolInfoInteger(m_breakevenConfigs[configIndex].symbol, SYMBOL_DIGITS);
 
    // Calcular novo stop loss (entrada + offset)
    double newStopLoss = 0;
 
    if (posType == POSITION_TYPE_BUY)
    {
-      newStopLoss = entryPrice + (config.breakevenOffset * point);
+      newStopLoss = entryPrice + (m_breakevenConfigs[configIndex].breakevenOffset * point);
    }
    else
    {
-      newStopLoss = entryPrice - (config.breakevenOffset * point);
+      newStopLoss = entryPrice - (m_breakevenConfigs[configIndex].breakevenOffset * point);
    }
 
    newStopLoss = NormalizeDouble(newStopLoss, digits);
@@ -2229,20 +2301,29 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
       if (m_logger != NULL)
       {
          m_logger.Debug(StringFormat("Breakeven não aplicado para #%d: novo SL %.5f não é melhor que atual %.5f",
-                                     config.ticket, newStopLoss, currentStopLoss));
+                                     m_breakevenConfigs[configIndex].ticket, newStopLoss, currentStopLoss));
       }
       return false;
    }
 
    // Executar modificação
-   if (ModifyPosition(config.ticket, newStopLoss, takeProfit))
+   if (ModifyPosition(m_breakevenConfigs[configIndex].ticket, newStopLoss, takeProfit))
    {
-      config.wasTriggered = true;
+      // ✅ CORREÇÃO MQL5: Modificar diretamente o array pelo índice
+      m_breakevenConfigs[configIndex].wasTriggered = true;
 
       if (m_logger != NULL)
       {
          m_logger.Info(StringFormat("BREAKEVEN ACIONADO para #%d: SL movido para %.5f (entrada + %.1f pontos)",
-                                    config.ticket, newStopLoss, config.breakevenOffset));
+                                    m_breakevenConfigs[configIndex].ticket, newStopLoss, m_breakevenConfigs[configIndex].breakevenOffset));
+      }
+
+      // ✅ NOVO: Configurar trailing stop automaticamente após breakeven
+      AutoConfigureTrailingStop(m_breakevenConfigs[configIndex].ticket, m_breakevenConfigs[configIndex].symbol);
+      
+      if (m_logger != NULL)
+      {
+         m_logger.Info(StringFormat("Trailing stop ativado automaticamente para #%d após breakeven", m_breakevenConfigs[configIndex].ticket));
       }
 
       return true;
@@ -2252,11 +2333,52 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
       if (m_logger != NULL)
       {
          m_logger.Error(StringFormat("Falha ao executar breakeven para #%d: %s",
-                                     config.ticket, GetLastErrorDescription()));
+                                     m_breakevenConfigs[configIndex].ticket, GetLastErrorDescription()));
       }
    }
 
    return false;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ NOVO MÉTODO: Verificar se breakeven foi acionado              |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::IsBreakevenTriggered(ulong ticket)
+{
+   // Verificar se existe configuração de breakeven para esta posição
+   int index = FindBreakevenConfigIndex(ticket);
+   
+   if (index >= 0)
+   {
+      // Se existe configuração, verificar se foi acionada
+      return m_breakevenConfigs[index].wasTriggered;
+   }
+   
+   // Se não existe configuração de breakeven, verificar se SL está em lucro
+   // (indica que breakeven foi feito manualmente ou por outro sistema)
+   if (!PositionSelectByTicket(ticket))
+   {
+      return false; // Posição não existe
+   }
+   
+   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double stopLoss = PositionGetDouble(POSITION_SL);
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   
+   if (stopLoss == 0)
+   {
+      return false; // Sem stop loss definido
+   }
+   
+   // Verificar se SL está em lucro (acima da entrada para BUY, abaixo para SELL)
+   if (posType == POSITION_TYPE_BUY)
+   {
+      return (stopLoss > entryPrice); // SL acima da entrada = breakeven acionado
+   }
+   else
+   {
+      return (stopLoss < entryPrice); // SL abaixo da entrada = breakeven acionado
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -2415,9 +2537,14 @@ void CTradeExecutor::ManageOpenPositions()
    datetime currentTime = TimeCurrent();
    static datetime lastFullCheck = 0;
 
-   // ✅ GERENCIAMENTO A CADA TICK
-   //ManageBreakevens();  
+   // ✅ CORREÇÃO CRÍTICA: SEQUÊNCIA CORRETA DE GERENCIAMENTO
+   // 1. PRIMEIRO: Gerenciar breakevens (prioridade máxima)
+   ManageBreakevens();
+   
+   // 2. SEGUNDO: Gerenciar trailing stops (após breakeven)
    ManageTrailingStops();
+   
+   // 3. TERCEIRO: Gerenciar parciais
    ManagePartialTakeProfits();
 
    // ✅ VERIFICAÇÃO COMPLETA A CADA 10 SEGUNDOS
@@ -2425,7 +2552,7 @@ void CTradeExecutor::ManageOpenPositions()
    {
       ManagePositionRisk();
       CleanupInvalidConfigurations();
-      CleanupBreakevenConfigs(); // ← ADICIONADO
+      CleanupBreakevenConfigs();
       lastFullCheck = currentTime;
    }
 }
