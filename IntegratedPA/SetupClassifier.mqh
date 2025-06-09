@@ -367,38 +367,49 @@ ConfluenceFactors CSetupClassifier::AnalyzeConfluence(string symbol, ENUM_TIMEFR
 //+------------------------------------------------------------------+
 //| Verificar qualidade do padrão                                    |
 //+------------------------------------------------------------------+
-bool CSetupClassifier::CheckPatternQuality(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal) {
+bool CSetupClassifier::CheckPatternQuality(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal)
+{
    bool hasQuality = false;
-   
+
    // Verificar se o padrão tem características bem definidas
-   if(signal.strategy == "Spike and Channel") {
+   if (signal.strategy == "Spike and Channel")
+   {
       // Verificar se o sinal tem dados consistentes
-      if(signal.entryPrice > 0 && signal.stopLoss > 0 && signal.takeProfits[0] > 0) {
+      if (signal.entryPrice > 0 && signal.stopLoss > 0 && signal.takeProfits[0] > 0)
+      {
          // Verificar se o stop loss está no lado correto
-         if(signal.direction == ORDER_TYPE_BUY && signal.stopLoss < signal.entryPrice) {
-            hasQuality = true;
-         } else if(signal.direction == ORDER_TYPE_SELL && signal.stopLoss > signal.entryPrice) {
+         if (signal.direction == ORDER_TYPE_BUY && signal.stopLoss < signal.entryPrice)
+         {
             hasQuality = true;
          }
-         
+         else if (signal.direction == ORDER_TYPE_SELL && signal.stopLoss > signal.entryPrice)
+         {
+            hasQuality = true;
+         }
+
          // Verificar se o primeiro take profit está no lado correto
-         if(hasQuality) {
-            if(signal.direction == ORDER_TYPE_BUY && signal.takeProfits[0] <= signal.entryPrice) {
+         if (hasQuality)
+         {
+            if (signal.direction == ORDER_TYPE_BUY && signal.takeProfits[0] <= signal.entryPrice)
+            {
                hasQuality = false;
-            } else if(signal.direction == ORDER_TYPE_SELL && signal.takeProfits[0] >= signal.entryPrice) {
+            }
+            else if (signal.direction == ORDER_TYPE_SELL && signal.takeProfits[0] >= signal.entryPrice)
+            {
                hasQuality = false;
             }
          }
       }
    }
-   
+
    // Log detalhado para debugging
-   if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("SetupClassifier: PatternQuality para %s (%s): %s - Entry:%.5f, SL:%.5f, TP1:%.5f", 
-                                symbol, signal.strategy, hasQuality ? "✓" : "✗", 
-                                signal.entryPrice, signal.stopLoss, signal.takeProfits[0]));
+   if (m_logger != NULL)
+   {
+      m_logger.Debug(StringFormat("SetupClassifier: PatternQuality para %s (%s): %s - Entry:%.5f, SL:%.5f, TP1:%.5f",
+                                  symbol, signal.strategy, hasQuality ? "✓" : "✗",
+                                  signal.entryPrice, signal.stopLoss, signal.takeProfits[0]));
    }
-   
+
    return hasQuality;
 }
 
@@ -497,22 +508,19 @@ bool CSetupClassifier::CheckTrendStrength(string symbol, ENUM_TIMEFRAMES timefra
 //+------------------------------------------------------------------+
 bool CSetupClassifier::CheckMomentum(string symbol, ENUM_TIMEFRAMES timeframe, Signal &signal)
 {
-   // Criar handle do RSI
-   int rsiHandle = iRSI(symbol, timeframe, 14, PRICE_CLOSE);
-   if (rsiHandle == INVALID_HANDLE)
+   // ✅ Usar handle diretamente (quando precisa de mais controle)
+   CIndicatorHandle *rsiHandle = m_marketContext.GetRSIHandle(timeframe);
+   if (!rsiHandle || !rsiHandle.IsValid())
       return false;
 
-   // Copiar valores do RSI
    double rsiBuffer[];
+   //✅ Configurar array como série temporal
+
    ArraySetAsSeries(rsiBuffer, true);
 
-   if (CopyBuffer(rsiHandle, 0, 0, 3, rsiBuffer) <= 0)
-   {
-      IndicatorRelease(rsiHandle);
+   if (rsiHandle.CopyBuffer(0, 0, 3, rsiBuffer) <= 0)
       return false;
-   }
 
-   IndicatorRelease(rsiHandle);
 
    double rsi = rsiBuffer[0];
 
@@ -538,19 +546,13 @@ bool CSetupClassifier::CheckMultiTimeframeConfirmation(string symbol, ENUM_TIMEF
    // Obter timeframe superior
    ENUM_TIMEFRAMES higherTF = GetHigherTimeframe(timeframe);
 
-   // Verificar tendência no timeframe superior
-   int higherTrend = 0;
+   // Usar pool através do MarketContext
+   CIndicatorHandle *ema21Handle = m_marketContext.GetEMAHandle(21, higherTF);
+   CIndicatorHandle *ema50Handle = m_marketContext.GetEMAHandle(50, higherTF);
 
-   // Criar handles temporários
-   int ema21Handle = iMA(symbol, higherTF, 21, 0, MODE_EMA, PRICE_CLOSE);
-   int ema50Handle = iMA(symbol, higherTF, 50, 0, MODE_EMA, PRICE_CLOSE);
-
-   if (ema21Handle == INVALID_HANDLE || ema50Handle == INVALID_HANDLE)
+   if (ema21Handle == NULL || ema50Handle == NULL ||
+       !ema21Handle.IsValid() || !ema50Handle.IsValid())
    {
-      if (ema21Handle != INVALID_HANDLE)
-         IndicatorRelease(ema21Handle);
-      if (ema50Handle != INVALID_HANDLE)
-         IndicatorRelease(ema50Handle);
       return false;
    }
 
@@ -558,8 +560,9 @@ bool CSetupClassifier::CheckMultiTimeframeConfirmation(string symbol, ENUM_TIMEF
    ArraySetAsSeries(ema21, true);
    ArraySetAsSeries(ema50, true);
 
-   if (CopyBuffer(ema21Handle, 0, 0, 1, ema21) > 0 &&
-       CopyBuffer(ema50Handle, 0, 0, 1, ema50) > 0)
+   int higherTrend = 0;
+   if (ema21Handle.CopyBuffer(0, 0, 1, ema21) > 0 &&
+       ema50Handle.CopyBuffer(0, 0, 1, ema50) > 0)
    {
 
       if (ema21[0] > ema50[0])
@@ -567,10 +570,6 @@ bool CSetupClassifier::CheckMultiTimeframeConfirmation(string symbol, ENUM_TIMEF
       else if (ema21[0] < ema50[0])
          higherTrend = -1;
    }
-
-   IndicatorRelease(ema21Handle);
-   IndicatorRelease(ema50Handle);
-
    // Verificar alinhamento
    if (signal.direction == ORDER_TYPE_BUY && higherTrend > 0)
       return true;
@@ -643,18 +642,20 @@ bool CSetupClassifier::CheckOptimalSession(string symbol)
 //+------------------------------------------------------------------+
 //| Verificar relação risco/retorno                                  |
 //+------------------------------------------------------------------+
-bool CSetupClassifier::CheckRiskReward(Signal &signal, double minRatio) {
+bool CSetupClassifier::CheckRiskReward(Signal &signal, double minRatio)
+{
    // Recalcular R:R para garantir precisão
    signal.CalculateRiskRewardRatio();
-   
+
    bool isGoodRR = (signal.riskRewardRatio >= minRatio);
-   
+
    // Log detalhado para debugging
-   if(m_logger != NULL) {
-      m_logger.Debug(StringFormat("SetupClassifier: RiskReward check - Calculado:%.2f, Mínimo:%.2f, Resultado:%s", 
-                                signal.riskRewardRatio, minRatio, isGoodRR ? "✓" : "✗"));
+   if (m_logger != NULL)
+   {
+      m_logger.Debug(StringFormat("SetupClassifier: RiskReward check - Calculado:%.2f, Mínimo:%.2f, Resultado:%s",
+                                  signal.riskRewardRatio, minRatio, isGoodRR ? "✓" : "✗"));
    }
-   
+
    return isGoodRR;
 }
 
@@ -807,4 +808,3 @@ double CSetupClassifier::CalculateSpreadMultiple(string symbol, double currentSp
 
    return (avgSpread > 0) ? currentSpread / avgSpread : 1.0;
 }
-

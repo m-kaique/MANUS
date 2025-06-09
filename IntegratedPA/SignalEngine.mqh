@@ -158,7 +158,7 @@ bool CSignalEngine::CheckDataValidity(string symbol, ENUM_TIMEFRAMES timeframe)
       return false;
    }
 
-   // Tentar copiar dados do indicador
+   // Alterar para o pool de indicadores
    double maBuffer[];
    ArraySetAsSeries(maBuffer, true);
    int copied = CopyBuffer(maHandle, 0, 0, 10, maBuffer);

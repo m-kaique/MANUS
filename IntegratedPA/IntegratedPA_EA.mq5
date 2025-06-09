@@ -33,7 +33,7 @@
 //| Parâmetros de entrada                                            |
 //+------------------------------------------------------------------+
 // Configurações Gerais
-input string GeneralSettings = "=== Configurações Gerais ==="; // Configurações Gerais
+input group "=== PARÂMETROS DE ENTRADA  ==="
 input bool EnableTrading = true;                               // Habilitar Trading
 input bool EnableBTC = false;                                  // Operar BIT$Dcoin
 input bool EnableWDO = false;                                  // Operar WDO
@@ -512,7 +512,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger))
+   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext))
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
       return (INIT_FAILED);

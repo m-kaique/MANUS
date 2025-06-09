@@ -14,6 +14,7 @@
 #include "Logger.mqh"
 #include "JsonLog.mqh"
 #include "Constants.mqh"
+#include "MarketContext.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0
@@ -37,6 +38,7 @@ private:
    // Objetos internos
    CTrade *m_trade;
    CLogger *m_logger;
+   CMarketContext *m_marketcontext;
    CJSONLogger *m_jsonlog;
 
 
@@ -158,10 +160,10 @@ public:
    CTradeExecutor();
    ~CTradeExecutor();
 
-   bool Initialize(CLogger *logger, CJSONLogger *jsonlog);
-
    // Métodos de inicialização
-   bool Initialize(CLogger *logger);
+   bool Initialize(CLogger *logger, CMarketContext *marketContext);
+
+   bool Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext);
 
    // Métodos de execução
    bool Execute(OrderRequest &request);
@@ -204,6 +206,7 @@ CTradeExecutor::CTradeExecutor()
    m_trade = NULL;
    m_logger = NULL;
    m_jsonlog = NULL;
+   m_marketcontext = NULL;
    m_tradeAllowed = true;
    m_maxRetries = 3;
    m_retryDelay = 1000; // 1 segundo
@@ -226,7 +229,7 @@ CTradeExecutor::~CTradeExecutor()
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog)
+bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *  marketcontext)
 {
    // Verificar parâmetros
    if (logger == NULL)
@@ -238,6 +241,9 @@ bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog)
    // Atribuir logger
    m_logger = logger;
    m_logger.Info("Inicializando TradeExecutor");
+
+   // Atribuir MarketContext
+   m_marketcontext = marketcontext;
 
    // Atribuit jsonlogger
    m_jsonlog = jsonlog;
@@ -1146,7 +1152,37 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-
+   
+   // ✅ Verificar se o contexto de mercado está disponível
+   if (m_marketcontext == NULL)
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Error("Contexto de mercado não inicializado");
+      }
+      return 0.0;
+   }
+   
+   // ✅ Verificar se o contexto tem dados válidos
+   if (!m_marketcontext.HasValidData())
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Warning("Dados de mercado insuficientes para cálculo de trailing stop ATR");
+      }
+      return 0.0;
+   }
+   
+   // ✅ Atualizar contexto para o símbolo correto
+   if (!m_marketcontext.UpdateSymbol(symbol))
+   {
+      if (m_logger != NULL)
+      {
+         m_logger.Error("Falha ao atualizar contexto para " + symbol);
+      }
+      return 0.0;
+   }
+   
    // Verificar se a posição existe
    if (!PositionSelectByTicket(ticket))
    {
@@ -1156,13 +1192,13 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-
+   
    // Obter informações da posição
    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-
+   
    // Verificar se os valores são válidos
    if (openPrice <= 0 || currentPrice <= 0)
    {
@@ -1172,37 +1208,36 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-
-   // Criar handle do ATR
-   int atrHandle = iATR(symbol, timeframe, 14);
-   if (atrHandle == INVALID_HANDLE)
+   
+   // ✅ Obter handle do ATR através do contexto de mercado
+   CIndicatorHandle* atrHandle = m_marketcontext.GetATRHandle(timeframe);
+   if (atrHandle == NULL || !atrHandle.IsValid())
    {
       if (m_logger != NULL)
       {
-         m_logger.Error("Falha ao criar handle do ATR: " + IntegerToString(GetLastError()));
+         m_logger.Error("Falha ao obter handle do ATR do pool para " + symbol);
       }
       return 0.0;
    }
-
-   // Copiar valores do ATR
+   
+   // ✅ Copiar valores do ATR usando o método do handle
    double atrValues[];
+   // ✅ Configurar array como série temporal
    ArraySetAsSeries(atrValues, true);
-   int copied = CopyBuffer(atrHandle, 0, 0, 1, atrValues);
-   IndicatorRelease(atrHandle);
 
-   if (copied <= 0)
+   if (atrHandle.CopyBuffer(0, 0, 1, atrValues) <= 0)
    {
       if (m_logger != NULL)
       {
          m_logger.Error("Falha ao copiar valores do ATR: " + IntegerToString(GetLastError()));
       }
       return 0.0;
-   }
-
+   }  
+  
    // Calcular distância baseada no ATR
    double atrValue = atrValues[0];
    double stopDistance = atrValue * atrMultiplier;
-
+   
    // Verificar se o valor do ATR é válido
    if (atrValue <= 0 || stopDistance <= 0)
    {
@@ -1212,14 +1247,12 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-
+   
    // Calcular novo stop loss
    double newStopLoss = 0.0;
-
    if (posType == POSITION_TYPE_BUY)
    {
       newStopLoss = currentPrice - stopDistance;
-
       // Verificar se o preço está em lucro
       if (currentPrice <= openPrice)
       {
@@ -1233,7 +1266,6 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
    else if (posType == POSITION_TYPE_SELL)
    {
       newStopLoss = currentPrice + stopDistance;
-
       // Verificar se o preço está em lucro
       if (currentPrice >= openPrice)
       {
@@ -1252,19 +1284,18 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-
+   
    // Normalizar o stop loss
    newStopLoss = NormalizeDouble(newStopLoss, digits);
-
+   
    if (m_logger != NULL)
    {
       m_logger.Debug(StringFormat("Trailing stop ATR calculado para posição #%d: %.5f (ATR: %.5f)",
                                   ticket, newStopLoss, atrValue));
    }
-
+   
    return newStopLoss;
 }
-
 //+------------------------------------------------------------------+
 //| Calcular stop loss para trailing stop baseado em média móvel     |
 //+------------------------------------------------------------------+
