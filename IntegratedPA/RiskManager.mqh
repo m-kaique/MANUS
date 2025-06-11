@@ -66,7 +66,7 @@ SETUP_QUALITY EvaluateSetupQuality(int factors, double riskReward)
 class CRiskManager {
 private:
    // Objetos internos
-   CLogger*        m_logger;
+   CStructuredLogger* m_logger;
    CMarketContext* m_marketContext;
    CCircuitBreaker *m_circuitBreaker;
    CHandlePool    *m_handlePool;
@@ -165,7 +165,7 @@ public:
    ~CRiskManager();
    
    // ✅ MÉTODOS DE INICIALIZAÇÃO ORIGINAIS MANTIDOS
-   bool Initialize(CLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker=NULL);
+   bool Initialize(CStructuredLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker=NULL);
    
    // ✅ MÉTODOS DE CONFIGURAÇÃO ORIGINAIS MANTIDOS
    void SetDefaultRiskPercentage(double percentage) { m_defaultRiskPercentage = percentage; }
@@ -315,7 +315,7 @@ CRiskManager::~CRiskManager() {
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker) {
+bool CRiskManager::Initialize(CStructuredLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker) {
    // Verificar parâmetros
    if(logger == NULL || marketContext == NULL) {
       Print("CRiskManager::Initialize - Logger ou MarketContext não podem ser NULL");
@@ -1031,9 +1031,9 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
    // ✅ LOG DETALHADO PARA DEBUGGING
    if (m_logger != NULL)
    {
-      m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (fator: %.1fx) para permitir parciais", 
-                                symbol, config.originalVolume, config.finalVolume, config.scalingFactor));
-      m_logger.Debug(StringFormat("📊 DETALHES: menor percentual: %.3f%%, volume mínimo calculado: %.2f", 
+      m_logger.LogVolumeScaling(symbol, signal.quality, config.originalVolume, config.finalVolume,
+                               "Partial scaling");
+      m_logger.Debug(StringFormat("📊 DETALHES: menor percentual: %.3f%%, volume mínimo calculado: %.2f",
                                 smallestPercentage * 100, minVolumeNeeded));
    }
    
@@ -1930,7 +1930,7 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
 
    if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate()) {
       if(m_logger != NULL)
-         m_logger.Warning("BuildRequest bloqueado pelo Circuit Breaker");
+         m_logger.LogCircuitBreaker(symbol, "BLOCKED", 0, "Breaker active");
       request.volume = 0;
       m_circuitBreaker.RegisterError();
       if(m_metricsCollector != NULL)
@@ -2046,12 +2046,10 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       m_metricsCollector.RecordDrawdownIntervention(ddController.GetCurrentDrawdown(), ddAdjustment);
 
    if(m_logger != NULL)
-   {
-      m_logger.Info(StringFormat("Drawdown Control: Level=%s, DD=%.2f%%, Volume Adj=%.2f",
-                                EnumToString(ddController.GetCurrentLevel()),
-                                ddController.GetCurrentDrawdown(),
-                                ddAdjustment));
-   }
+      m_logger.LogDrawdownControl(ddController.GetCurrentDrawdown(),
+                                  ddController.GetCurrentLevel(),
+                                  ddAdjustment,
+                                  ddController.IsTradingAllowed() ? "CONTINUE" : "PAUSE");
    delete ddController;
 
    // Adjust position size based on market volatility
@@ -2068,10 +2066,7 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_metricsCollector.RecordVolumeAdjustment(beforeVol, baseVolume, "Volatility");
 
       if(m_logger != NULL)
-      {
-         m_logger.Info(StringFormat("Volatility Adjustment: ATR=%.5f, Baseline=%.5f, Factor=%.2f",
-                                   currentATR, baseline, volatilityFactor));
-      }
+         m_logger.LogVolatilityAdjustment(symbol, currentATR, baseline, volatilityFactor, "");
    }
 
    // ✅ NOVA LÓGICA: GARANTIR VOLUME ADEQUADO PARA PARCIAIS
@@ -2096,8 +2091,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
                baseVolume = originalVolume * tier;
 
                if(m_logger != NULL) {
-                  m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (tier %.1fx)",
-                                           symbol, originalVolume, baseVolume, tier));
+                  m_logger.LogVolumeScaling(symbol, signal.quality, originalVolume, baseVolume,
+                                         "Tier selection");
 
                   double qualityLimit = 1.0;
                   switch(signal.quality) {

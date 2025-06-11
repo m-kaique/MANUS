@@ -19,7 +19,7 @@ private:
    datetime m_lastTrip;         // Momento em que foi ativado
    int      m_cooldownSeconds;  // Tempo de espera após disparo
    bool     m_tripped;          // Flag indicando se está ativo
-   CLogger *m_logger;           // Logger opcional
+   CStructuredLogger *m_logger;           // Logger opcional
 
    // Atualizar contadores e verificar janela
    void CheckWindow()
@@ -36,7 +36,7 @@ private:
       {
          m_tripped = false;
          if(m_logger != NULL)
-            m_logger.Info("CircuitBreaker reabilitado");
+            m_logger.LogCircuitBreaker("ALL", "RESET", m_errorCount, "Recovered");
       }
    }
 
@@ -53,7 +53,7 @@ public:
       m_logger          = NULL;
    }
 
-   bool Initialize(int threshold, int windowSeconds, int cooldownSeconds, CLogger *logger=NULL)
+   bool Initialize(int threshold, int windowSeconds, int cooldownSeconds, CStructuredLogger *logger=NULL)
    {
       if(threshold <= 0 || windowSeconds <= 0 || cooldownSeconds <= 0)
          return false;
@@ -92,7 +92,7 @@ public:
          m_tripped  = true;
          m_lastTrip = TimeCurrent();
          if(m_logger != NULL)
-            m_logger.Warning("CircuitBreaker ativado devido a erros consecutivos");
+            m_logger.LogCircuitBreaker("ALL", "ACTIVATED", m_errorCount, "Consecutive errors exceeded threshold");
       }
    }
 
