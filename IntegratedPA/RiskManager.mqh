@@ -18,8 +18,10 @@
 #include "Structures.mqh"
 #include "Logger.mqh"
 #include "MarketContext.mqh"
+#include "Indicators/IndicatorHandlePool.mqh"
 #include "Constants.mqh"
 #include "CircuitBreaker.mqh"
+#include "VolatilityAdjuster.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -65,6 +67,7 @@ private:
    CLogger*        m_logger;
    CMarketContext* m_marketContext;
    CCircuitBreaker *m_circuitBreaker;
+   CHandlePool    *m_handlePool;
    
    // Configurações gerais
    double          m_defaultRiskPercentage;
@@ -314,6 +317,7 @@ bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext, CC
    m_logger = logger;
    m_marketContext = marketContext;
    m_circuitBreaker = circuitBreaker;
+   m_handlePool = (marketContext != NULL) ? marketContext.GetHandlePool() : NULL;
    
    m_logger.Info("Inicializando RiskManager com Sistema de Parciais Universal");
    
@@ -1988,9 +1992,9 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    double riskPercentage = (index >= 0) ? m_symbolParams[index].riskPercentage : m_defaultRiskPercentage;
    
    // ✅ CALCULAR VOLUME BASE
-   double baseVolume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
-   
-   if(baseVolume <= 0) {
+  double baseVolume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
+
+  if(baseVolume <= 0) {
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Volume calculado inválido para " + symbol);
       }
@@ -1998,8 +2002,25 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       if(m_circuitBreaker != NULL)
          m_circuitBreaker.RegisterError();
       return request;
+  }
+
+   // Adjust position size based on market volatility
+   if(m_handlePool != NULL)
+   {
+      CVolatilityAdjuster volatilityAdjuster(m_handlePool);
+      volatilityAdjuster.UpdateBaseline(symbol);
+      double volatilityFactor = volatilityAdjuster.CalculateVolatilityAdjustment(symbol);
+      double currentATR       = volatilityAdjuster.GetCurrentATR(symbol);
+      double baseline         = volatilityAdjuster.GetBaselineVolatility(symbol);
+      baseVolume             *= volatilityFactor;
+
+      if(m_logger != NULL)
+      {
+         m_logger.Info(StringFormat("Volatility Adjustment: ATR=%.5f, Baseline=%.5f, Factor=%.2f",
+                                   currentATR, baseline, volatilityFactor));
+      }
    }
-   
+
    // ✅ NOVA LÓGICA: GARANTIR VOLUME ADEQUADO PARA PARCIAIS
    if(index >= 0 && m_symbolParams[index].usePartials) {
       
