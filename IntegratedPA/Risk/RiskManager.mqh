@@ -15,15 +15,16 @@
 #define RISKMANAGER_MQH
 
 // Inclusão de bibliotecas necessárias
-#include "../Structures.mqh"
+#include "../Core/Structures.mqh"
 #include "../Logging/Logger.mqh"
-#include "../MarketContext.mqh"
+#include "../Analysis/MarketContext.mqh"
 #include "../Indicators/IndicatorHandlePool.mqh"
-#include "../Constants.mqh"
+#include "../Core/Constants.mqh"
 #include "CircuitBreaker.mqh"
-#include "../VolatilityAdjuster.mqh"
+#include "VolatilityAdjuster.mqh"
 #include "DrawdownController.mqh"
-#include "../MetricsCollector.mqh"
+#include "../Core/MetricsCollector.mqh"
+#include "PartialManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |

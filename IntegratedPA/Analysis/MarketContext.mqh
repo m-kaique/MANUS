@@ -7,9 +7,9 @@
 #property link "https://www.mql5.com"
 #property strict
 
-#include "Structures.mqh"
-#include "Logging/Logger.mqh"
-#include "Indicators/IndicatorHandlePool.mqh"
+#include "../Core/Structures.mqh"
+#include "../Logging/Logger.mqh"
+#include "../Indicators/IndicatorHandlePool.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para análise de contexto de mercado                        |

@@ -8,7 +8,7 @@
 #property version   "1.00"
 #property strict
 
-#include "Structures.mqh"
+#include "../Core/Structures.mqh"
 
 //+------------------------------------------------------------------+
 //| Funções para manipulação de timeframes                           |

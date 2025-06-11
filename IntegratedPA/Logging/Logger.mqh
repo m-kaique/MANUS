@@ -8,7 +8,7 @@
 #property version   "1.00"
 #property strict
 
-#include "../Structures.mqh"
+#include "../Core/Structures.mqh"
 #include "../Risk/DrawdownController.mqh"
 
 //+------------------------------------------------------------------+

@@ -18,15 +18,15 @@
 //+------------------------------------------------------------------+
 //| Inclusão dos módulos personalizados                              |
 //+------------------------------------------------------------------+
-#include "Structures.mqh"
-#include "MarketContext.mqh"
-#include "SignalEngine.mqh"
+#include "Core/Structures.mqh"
+#include "Analysis/MarketContext.mqh"
+#include "Engine/SignalEngine.mqh"
 #include "Risk/RiskManager.mqh"
-#include "TradeExecutor.mqh"
+#include "Execution/TradeExecutor.mqh"
 #include "Risk/CircuitBreaker.mqh"
 #include "Logging/Logger.mqh"
-#include "Utils.mqh"
-#include "SetupClassifier.mqh"
+#include "Utils/Utils.mqh"
+#include "Analysis/SetupClassifier.mqh"
 #include "Logging/JsonLog.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
 

@@ -8,11 +8,11 @@
 #property version "1.00"
 #property strict
 
-#include "Structures.mqh"
-#include "Utils.mqh"
-#include "Logging/Logger.mqh"
-#include "MarketContext.mqh"
-#include "SetupClassifier.mqh"
+#include "../Core/Structures.mqh"
+#include "../Utils/Utils.mqh"
+#include "../Logging/Logger.mqh"
+#include "../Analysis/MarketContext.mqh"
+#include "../Analysis/SetupClassifier.mqh"
 #include "Risk/CircuitBreaker.mqh"
 
 // Strategies

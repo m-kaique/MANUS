@@ -8,10 +8,10 @@
 #property version "1.00"
 #property strict
 
-#include "Structures.mqh"
-#include "Logging/Logger.mqh"
+#include "../Core/Structures.mqh"
+#include "../Logging/Logger.mqh"
 #include "MarketContext.mqh"
-#include "Utils.mqh"
+#include "../Utils/Utils.mqh"
 
 //+------------------------------------------------------------------+
 //| Enumeração para fatores de confluência                           |

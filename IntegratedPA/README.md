@@ -16,4 +16,17 @@ This project is being reorganized to improve maintainability.
 - `UI/` – interface elements
 - `Tests/` – test scripts and examples
 
-Existing files are being moved into these folders gradually.
+Most of the original monolithic files were moved:
+
+- Core components like `Structures.mqh`, `Constants.mqh`, `MetricsCollector.mqh`
+  and `PerformanceTracker.mqh` now live in `Core/`.
+- Market analysis utilities such as `MarketContext.mqh` and `SetupClassifier.mqh`
+  were relocated to `Analysis/`.
+- The main trading engine `SignalEngine.mqh` sits in `Engine/` while
+  `TradeExecutor.mqh` is under `Execution/`.
+- Risk modules including `RiskManager.mqh`, `CircuitBreaker.mqh` and
+  `VolatilityAdjuster.mqh` are placed in `Risk/`.
+- User interface code (`VisualPanel.mqh`) resides in `UI/` and helpers like
+  `Utils.mqh` were moved to `Utils/`.
+
+Include paths in all modules were updated to reflect this hierarchy.
