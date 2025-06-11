@@ -19,6 +19,7 @@
 #include "Logger.mqh"
 #include "MarketContext.mqh"
 #include "Constants.mqh"
+#include "CircuitBreaker.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para gestão de risco e dimensionamento de posições        |
@@ -28,6 +29,7 @@ private:
    // Objetos internos
    CLogger*        m_logger;
    CMarketContext* m_marketContext;
+   CCircuitBreaker *m_circuitBreaker;
    
    // Configurações gerais
    double          m_defaultRiskPercentage;
@@ -110,7 +112,7 @@ public:
    ~CRiskManager();
    
    // ✅ MÉTODOS DE INICIALIZAÇÃO ORIGINAIS MANTIDOS
-   bool Initialize(CLogger* logger, CMarketContext* marketContext);
+   bool Initialize(CLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker=NULL);
    
    // ✅ MÉTODOS DE CONFIGURAÇÃO ORIGINAIS MANTIDOS
    void SetDefaultRiskPercentage(double percentage) { m_defaultRiskPercentage = percentage; }
@@ -156,6 +158,7 @@ public:
 CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRisk = 5.0) {
    m_logger = NULL;
    m_marketContext = NULL;
+   m_circuitBreaker = NULL;
    m_defaultRiskPercentage = defaultRiskPercentage;
    m_maxTotalRisk = maxTotalRisk;
    m_accountBalance = 0;
@@ -176,7 +179,7 @@ CRiskManager::~CRiskManager() {
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext) {
+bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker) {
    // Verificar parâmetros
    if(logger == NULL || marketContext == NULL) {
       Print("CRiskManager::Initialize - Logger ou MarketContext não podem ser NULL");
@@ -186,6 +189,7 @@ bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext) {
    // Atribuir objetos
    m_logger = logger;
    m_marketContext = marketContext;
+   m_circuitBreaker = circuitBreaker;
    
    m_logger.Info("Inicializando RiskManager com Sistema de Parciais Universal");
    
@@ -1596,6 +1600,14 @@ bool CRiskManager::ValidateMarketPrice(string symbol, double &price) {
 //+------------------------------------------------------------------+
 OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase) {
    OrderRequest request;
+
+   if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate()) {
+      if(m_logger != NULL)
+         m_logger.Warning("BuildRequest bloqueado pelo Circuit Breaker");
+      request.volume = 0;
+      m_circuitBreaker.RegisterError();
+      return request;
+   }
    
    // Preencher dados básicos
    request.symbol = symbol;
@@ -1607,6 +1619,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_logger.Error("RiskManager: Símbolo inválido para construção de requisição");
       }
       request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return request;
    }
    
@@ -1617,6 +1631,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_logger.Error("RiskManager: Falha ao validar preço de mercado para " + symbol);
       }
       request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return request;
    }
    
@@ -1633,6 +1649,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_logger.Error("RiskManager: Falha ao obter tick para " + symbol);
       }
       request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return request;
    }
    
@@ -1661,6 +1679,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_logger.Error("RiskManager: Stop loss inválido do sinal para " + symbol);
       }
       request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return request;
    }
    
@@ -1676,6 +1696,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_logger.Error("RiskManager: Volume calculado inválido para " + symbol);
       }
       request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return request;
    }
    
@@ -1799,6 +1821,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Volume final inválido para " + symbol);
       }
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return request;
    }
    
@@ -1811,6 +1835,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
                                 symbol, request.volume, request.price, request.stopLoss, request.takeProfit));
    }
    
+   if(m_circuitBreaker != NULL)
+      m_circuitBreaker.RegisterSuccess();
    return request;
 }
 

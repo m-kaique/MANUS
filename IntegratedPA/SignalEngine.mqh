@@ -12,6 +12,7 @@
 #include "Logger.mqh"
 #include "MarketContext.mqh"
 #include "SetupClassifier.mqh"
+#include "CircuitBreaker.mqh"
 
 // Strategies
 #include "strategies/SpikeAndChannel.mqh"
@@ -25,6 +26,7 @@ private:
    CLogger *m_logger;                   // Ponteiro para o logger
    CMarketContext *m_marketContext;     // Ponteiro para o contexto de mercado
    CSetupClassifier *m_setupClassifier; // Ponteiro para o contexto de mercado
+   CCircuitBreaker *m_circuitBreaker;   // Circuit breaker compartilhado
 
    // Variáveis para armazenar configurações
    int m_lookbackBars;     // Número de barras para análise retroativa
@@ -41,11 +43,11 @@ private:
 public:
    // Construtores e destrutor
    CSignalEngine();
-   CSignalEngine(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass);
+   CSignalEngine(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass, CCircuitBreaker *circuitBreaker=NULL);
    ~CSignalEngine();
 
    // Método de inicialização
-   bool Initialize(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupclass);
+   bool Initialize(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupclass, CCircuitBreaker *circuitBreaker=NULL);
 
    // Método principal para geração de sinais
    Signal Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAMES timeframe);
@@ -71,6 +73,7 @@ CSignalEngine::CSignalEngine()
    m_logger = NULL;
    m_marketContext = NULL;
    m_setupClassifier = NULL;
+   m_circuitBreaker = NULL;
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_hasValidData = false;
@@ -79,11 +82,12 @@ CSignalEngine::CSignalEngine()
 //+------------------------------------------------------------------+
 //| Construtor com parâmetros                                        |
 //+------------------------------------------------------------------+
-CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass)
+CSignalEngine::CSignalEngine(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass, CCircuitBreaker *circuitBreaker=NULL)
 {
    m_logger = logger;
    m_marketContext = marketContext;
    m_setupClassifier = setupClass;
+   m_circuitBreaker = circuitBreaker;
    m_lookbackBars = 100;
    m_minRiskReward = 1.5;
    m_hasValidData = false;
@@ -100,7 +104,7 @@ CSignalEngine::~CSignalEngine()
 //+------------------------------------------------------------------+
 //| Inicializa o motor de sinais                                     |
 //+------------------------------------------------------------------+
-bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass)
+bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext, CSetupClassifier *setupClass, CCircuitBreaker *circuitBreaker)
 {
    if (logger == NULL || marketContext == NULL)
    {
@@ -114,6 +118,7 @@ bool CSignalEngine::Initialize(CLogger *logger, CMarketContext *marketContext, C
    m_logger = logger;
    m_marketContext = marketContext;
    m_setupClassifier = setupClass;
+   m_circuitBreaker = circuitBreaker;
 
    m_logger.Info("SignalEngine inicializado com sucesso");
    return true;
@@ -185,15 +190,25 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
    Signal signal;
    signal.id = 0; // Sinal vazio/inválido por padrão
 
+   if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate())
+   {
+      if(m_logger != NULL)
+         m_logger.Warning("Signal generation blocked by Circuit Breaker");
+      m_circuitBreaker.RegisterError();
+      return signal;
+   }
+
    // Validação rigorosa de parâmetros
    if (symbol == "" || timeframe == PERIOD_CURRENT)
    {
       if (m_logger != NULL)
       {
          m_logger.Error("SignalEngine: Parâmetros inválidos para geração de sinal. Símbolo: '" +
-                        symbol + "', Timeframe: " + EnumToString(timeframe));
+                          symbol + "', Timeframe: " + EnumToString(timeframe));
       }
       m_hasValidData = false;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return signal;
    }
 
@@ -205,6 +220,8 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
          m_logger.Error("SignalEngine: Símbolo '" + symbol + "' não encontrado ou não selecionado");
       }
       m_hasValidData = false;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return signal;
    }
 
@@ -217,6 +234,8 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
          m_logger.Warning("SignalEngine: Dados inválidos ou insuficientes para geração de sinal em " +
                           symbol + " (" + EnumToString(timeframe) + ")");
       }
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return signal;
    }
 
@@ -252,6 +271,8 @@ Signal CSignalEngine::Generate(string symbol, MARKET_PHASE phase, ENUM_TIMEFRAME
       {
          m_logger.LogSignal(signal);
       }
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterSuccess();
    }
 
    return signal;
@@ -440,6 +461,8 @@ Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAM
       {
          m_logger.Error("SignalEngine: Falha ao criar objeto SpikeAndChannel");
       }
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return signal;
    }
 
@@ -450,6 +473,8 @@ Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAM
          m_logger.Error("SignalEngine: Falha ao inicializar objeto SpikeAndChannel");
       }
       delete spikeAndChannel;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       return signal;
    }
 
