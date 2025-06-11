@@ -15,6 +15,7 @@
 #include "JsonLog.mqh"
 #include "Constants.mqh"
 #include "MarketContext.mqh"
+#include "CircuitBreaker.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0
@@ -40,6 +41,7 @@ private:
    CLogger *m_logger;
    CMarketContext *m_marketcontext;
    CJSONLogger *m_jsonlog;
+   CCircuitBreaker *m_circuitBreaker;
 
 
    // Configurações
@@ -161,9 +163,9 @@ public:
    ~CTradeExecutor();
 
    // Métodos de inicialização
-   bool Initialize(CLogger *logger, CMarketContext *marketContext);
+   bool Initialize(CLogger *logger, CMarketContext *marketContext, CCircuitBreaker *circuitBreaker=NULL);
 
-   bool Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext);
+   bool Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext, CCircuitBreaker *circuitBreaker=NULL);
 
    // Métodos de execução
    bool Execute(OrderRequest &request);
@@ -207,6 +209,7 @@ CTradeExecutor::CTradeExecutor()
    m_logger = NULL;
    m_jsonlog = NULL;
    m_marketcontext = NULL;
+   m_circuitBreaker = NULL;
    m_tradeAllowed = true;
    m_maxRetries = 3;
    m_retryDelay = 1000; // 1 segundo
@@ -226,10 +229,15 @@ CTradeExecutor::~CTradeExecutor()
    }
 }
 
+bool CTradeExecutor::Initialize(CLogger *logger, CMarketContext *marketContext, CCircuitBreaker *circuitBreaker)
+{
+   return Initialize(logger, NULL, marketContext, circuitBreaker);
+}
+
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *  marketcontext)
+bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *  marketcontext, CCircuitBreaker *circuitBreaker)
 {
    // Verificar parâmetros
    if (logger == NULL)
@@ -240,6 +248,7 @@ bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketCo
 
    // Atribuir logger
    m_logger = logger;
+   m_circuitBreaker = circuitBreaker;
    m_logger.Info("Inicializando TradeExecutor");
 
    // Atribuir MarketContext
@@ -273,6 +282,15 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       m_lastError = -1;
       m_lastErrorDesc = "Trading não está habilitado";
       m_logger.Warning(m_lastErrorDesc);
+      return false;
+   }
+
+   if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate())
+   {
+      m_lastError = -5;
+      m_lastErrorDesc = "Circuit Breaker ativo";
+      if(m_logger != NULL)
+         m_logger.Warning("Execução bloqueada pelo Circuit Breaker");
       return false;
    }
 
@@ -403,20 +421,23 @@ bool CTradeExecutor::Execute(OrderRequest &request)
    if (ticket > 0)
    {
       AutoConfigureBreakeven(ticket, request.symbol);
-      
+
       // ✅ NOVO: Configurar controle inteligente de parciais
       ConfigurePartialControl(ticket, request.symbol, request.price, request.volume);
-      
+
       if (m_logger != NULL)
       {
          m_logger.Info(StringFormat("Breakeven e controle de parciais configurados para #%d. Trailing será ativado após breakeven.", ticket));
       }
    }
-
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterSuccess();
       return true;
    }
    else
    {
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
       m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
       return false;
    }
@@ -3067,6 +3088,11 @@ bool CTradeExecutor::IsPriceMovingFavorably(ulong ticket, double currentPrice)
 void CTradeExecutor::ManageOpenPositions()
 {
    if (!m_tradeAllowed)
+   {
+      return;
+   }
+
+   if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate())
    {
       return;
    }

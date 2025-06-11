@@ -23,6 +23,7 @@
 #include "SignalEngine.mqh"
 #include "RiskManager.mqh"
 #include "TradeExecutor.mqh"
+#include "CircuitBreaker.mqh"
 #include "Logger.mqh"
 #include "Utils.mqh"
 #include "SetupClassifier.mqh"
@@ -62,6 +63,7 @@ CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
 CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
+CCircuitBreaker *g_circuitBreaker = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
 CJSONLogger *g_jsonLogger = NULL;
 
@@ -472,6 +474,15 @@ int OnInit()
    //////////////////////////
 
    //
+
+   g_circuitBreaker = new CCircuitBreaker();
+   if(g_circuitBreaker == NULL)
+   {
+      g_logger.Error("Erro ao criar objeto CircuitBreaker");
+      return (INIT_FAILED);
+   }
+   g_circuitBreaker.Initialize(5,60,60,g_logger);
+
    g_signalEngine = new CSignalEngine();
    if (g_signalEngine == NULL)
    {
@@ -479,7 +490,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_signalEngine.Initialize(g_logger, g_marketContext, g_setupClassifier))
+   if (!g_signalEngine.Initialize(g_logger, g_marketContext, g_setupClassifier, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar SignalEngine");
       return (INIT_FAILED);
@@ -492,7 +503,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_riskManager.Initialize(g_logger, g_marketContext))
+   if (!g_riskManager.Initialize(g_logger, g_marketContext, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar RiskManager");
       return (INIT_FAILED);
@@ -512,7 +523,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext))
+   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
       return (INIT_FAILED);
@@ -590,6 +601,12 @@ void OnDeinit(const int reason)
    {
       delete g_tradeExecutor;
       g_tradeExecutor = NULL;
+   }
+
+   if (g_circuitBreaker != NULL)
+   {
+      delete g_circuitBreaker;
+      g_circuitBreaker = NULL;
    }
 
    if (g_riskManager != NULL)
