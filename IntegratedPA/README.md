@@ -24,8 +24,10 @@ Most of the original monolithic files were moved:
   were relocated to `Analysis/`.
 - The main trading engine `SignalEngine.mqh` sits in `Engine/` while
   `TradeExecutor.mqh` is under `Execution/`.
-- Risk modules including `RiskManager.mqh`, `CircuitBreaker.mqh` and
-  `VolatilityAdjuster.mqh` are placed in `Risk/`.
+ - Risk modules including `RiskManager.mqh`, `CircuitBreaker.mqh` and
+   `VolatilityAdjuster.mqh` are placed in `Risk/`. A preliminary
+   `PartialManager` module was added in the same folder as part of splitting
+   responsibilities from `RiskManager`.
 - User interface code (`VisualPanel.mqh`) resides in `UI/` and helpers like
   `Utils.mqh` were moved to `Utils/`.
 

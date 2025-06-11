@@ -13,7 +13,7 @@
 #include "../Logging/Logger.mqh"
 #include "../Analysis/MarketContext.mqh"
 #include "../Analysis/SetupClassifier.mqh"
-#include "Risk/CircuitBreaker.mqh"
+#include "../Risk/CircuitBreaker.mqh"
 
 // Strategies
 #include "strategies/SpikeAndChannel.mqh"

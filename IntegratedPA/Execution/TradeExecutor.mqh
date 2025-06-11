@@ -15,7 +15,7 @@
 #include "../Logging/JsonLog.mqh"
 #include "../Core/Constants.mqh"
 #include "../Analysis/MarketContext.mqh"
-#include "Risk/CircuitBreaker.mqh"
+#include "../Risk/CircuitBreaker.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0
