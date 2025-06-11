@@ -25,6 +25,8 @@
 #include "DrawdownController.mqh"
 #include "../Core/MetricsCollector.mqh"
 #include "PartialManager.mqh"
+#include "PositionSizing.mqh"
+#include "RiskValidation.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
