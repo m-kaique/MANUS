@@ -8,6 +8,7 @@
 #property version   "1.00"
 
 #include "Structures.mqh"
+#include "DrawdownController.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para gerenciamento de logs                                |
