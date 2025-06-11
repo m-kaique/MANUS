@@ -4,7 +4,7 @@
 //+------------------------------------------------------------------+
 #property strict
 
-#include "Logger.mqh"
+#include "../Logging/Logger.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para controle de Circuit Breaker                          |

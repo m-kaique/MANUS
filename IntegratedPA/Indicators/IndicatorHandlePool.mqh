@@ -9,8 +9,8 @@
 #property strict
 
 #include "IndicatorHandle.mqh"
-#include "../Logger.mqh"
-#include "../Structures.mqh"
+#include "../Logging/Logger.mqh"
+#include "../Core/Structures.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para gerenciamento centralizado de handles de indicadores |

@@ -1,5 +1,6 @@
 #ifndef METRICSCOLLECTOR_MQH
 #define METRICSCOLLECTOR_MQH
+#property strict
 
 #include "Structures.mqh"
 

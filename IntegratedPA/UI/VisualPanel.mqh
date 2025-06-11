@@ -8,8 +8,8 @@
 #property version   "1.00"
 #property strict
 
-#include "Structures.mqh"
-#include "PerformanceTracker.mqh"
+#include "../Core/Structures.mqh"
+#include "../Core/PerformanceTracker.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para exibição de painel visual                            |

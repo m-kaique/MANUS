@@ -6,16 +6,17 @@
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property version "1.00"
+#property strict
 
-#include "Structures.mqh"
-#include "Utils.mqh"
-#include "Logger.mqh"
-#include "MarketContext.mqh"
-#include "SetupClassifier.mqh"
-#include "CircuitBreaker.mqh"
+#include "../Core/Structures.mqh"
+#include "../Utils/Utils.mqh"
+#include "../Logging/Logger.mqh"
+#include "../Analysis/MarketContext.mqh"
+#include "../Analysis/SetupClassifier.mqh"
+#include "../Risk/CircuitBreaker.mqh"
 
 // Strategies
-#include "strategies/SpikeAndChannel.mqh"
+#include "../strategies/SpikeAndChannel.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para geração de sinais de trading                         |
