@@ -2072,5 +2072,6 @@ double CRiskManager::GetCurrentTotalRisk() {
 
    return (totalRisk / balance) * 100.0;
 }
+
 #endif // RISKMANAGER_MQH
 
