@@ -48,7 +48,27 @@ bool CTradeExecutor::Execute(OrderRequest &request)
    // Atualizar valores no request
    request.price = adjustedEntry;
    request.stopLoss = adjustedSL;
-   request.takeProfit = adjustedTP;
+  request.takeProfit = adjustedTP;
+
+   // Verificar slippage em relação ao preço atual
+   double point=SymbolInfoDouble(request.symbol,SYMBOL_POINT);
+   MqlTick t; SymbolInfoTick(request.symbol,t);
+   double marketPrice = (request.type==ORDER_TYPE_SELL || request.type==ORDER_TYPE_SELL_LIMIT || request.type==ORDER_TYPE_SELL_STOP) ? t.bid : t.ask;
+   double slipp = MathAbs(marketPrice - request.price)/point;
+   if(request.maxSlippage>0 && slipp>request.maxSlippage)
+   {
+      if(m_logger!=NULL)
+         m_logger.LogCategorized(LOG_TRADE_EXECUTION, LOG_LEVEL_WARNING, request.symbol,
+                                "SLIPPAGE_TOO_BIG", DoubleToString(slipp,1), "");
+      return false;
+   }
+   else if(request.maxSlippage>0 && slipp>0 && (request.type==ORDER_TYPE_BUY_LIMIT || request.type==ORDER_TYPE_SELL_LIMIT || request.type==ORDER_TYPE_BUY_STOP || request.type==ORDER_TYPE_SELL_STOP))
+   {
+      request.price = marketPrice;
+      if(m_logger!=NULL)
+         m_logger.LogCategorized(LOG_TRADE_EXECUTION, LOG_LEVEL_INFO, request.symbol,
+                                "PENDING_MISPLACED", DoubleToString(slipp,1), "");
+   }
 
    // Registrar detalhes da ordem
    m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",

@@ -46,6 +46,7 @@ input string RiskSettings = "=== Configurações de Risco ==="; // Configuraçõ
 input double RiskPerTrade = 1.0;                              // Risco por operação (%)
 input double MaxTotalRisk = 5.0;                              // Risco máximo total (%)
 input double PartialTakeProfit = 0.5;                         // Percentual da posição para realizar parcial
+input string AssetCfgJSON = "[{'Symbol':'WIN$D','TF':3,'MaxStopPoints':300,'ATRMultiplier':3.0,'RiskPercent':1.0,'MaxVolPercent':10.0,'MaxEntrySlippage':40,'NoTradeAfter':'15:30','ForceCloseBefore':'16:55'}]";
 
 // Configurações de Estratégia
 input string StrategySettings = "=== Configurações de Estratégia ==="; // Configurações de Estratégia
@@ -177,6 +178,64 @@ bool IsHistoryAvailable(string symbol, ENUM_TIMEFRAMES timeframe, int minBars = 
       return false;
    }
    return true;
+}
+
+void WarmUpHistory()
+{
+   for(int i=0;i<ArraySize(g_assets);i++)
+   {
+      string s = g_assets[i].symbol;
+      ENUM_TIMEFRAMES tf = MainTimeframe;
+      int bars = g_assets[i].minRequiredBars;
+      MqlRates rates[];
+      CopyRates(s, tf, 0, bars, rates);
+   }
+}
+
+struct ParsedAssetCfg
+{
+   string Symbol;
+   int    TF;
+   double MaxStopPoints;
+   double ATRMultiplier;
+   double RiskPercent;
+   double MaxVolPercent;
+   double MaxEntrySlippage;
+   string NoTradeAfter;
+   string ForceCloseBefore;
+};
+
+int ParseAssetConfigJSON(string json, ParsedAssetCfg &arr[])
+{
+   string clean = StringReplace(StringReplace(StringReplace(json, "[", ""), "]", ""), "'", "\"");
+   string items[]; int cnt = StringSplit(clean, '}', items);
+   int out=0;
+   for(int i=0;i<cnt;i++)
+   {
+      string it=StringTrim(items[i]);
+      if(StringLen(it)==0) continue;
+      int p = StringFind(it, "{");
+      if(p>=0) it = StringSubstr(it,p+1);
+      string pairs[]; int pc=StringSplit(it, ',', pairs);
+      ArrayResize(arr,out+1); ParsedAssetCfg c; 
+      for(int j=0;j<pc;j++)
+      {
+         string kv[]; if(StringSplit(pairs[j], ':', kv)!=2) continue;
+         string key=StringReplace(StringReplace(kv[0],"\"","")," ","");
+         string val=StringReplace(StringReplace(kv[1],"\"","")," ","");
+         if(key=="Symbol") c.Symbol=val;
+         else if(key=="TF") c.TF=(int)StringToInteger(val);
+         else if(key=="MaxStopPoints") c.MaxStopPoints=StringToDouble(val);
+         else if(key=="ATRMultiplier") c.ATRMultiplier=StringToDouble(val);
+         else if(key=="RiskPercent") c.RiskPercent=StringToDouble(val);
+         else if(key=="MaxVolPercent") c.MaxVolPercent=StringToDouble(val);
+         else if(key=="MaxEntrySlippage") c.MaxEntrySlippage=StringToDouble(val);
+         else if(key=="NoTradeAfter") c.NoTradeAfter=val;
+         else if(key=="ForceCloseBefore") c.ForceCloseBefore=val;
+      }
+      arr[out]=c; out++;
+   }
+   return out;
 }
 
 //+------------------------------------------------------------------+
@@ -346,6 +405,13 @@ bool ConfigureRiskParameters()
    {
       // Configurar parâmetros de risco específicos para cada ativo
       g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
+      g_riskManager.ConfigureSymbolRiskLimits(g_assets[i].symbol,
+                                              g_assets[i].maxStopPoints,
+                                              g_assets[i].atrMultiplier,
+                                              g_assets[i].maxVolPercent,
+                                              g_assets[i].maxEntrySlippage,
+                                              g_assets[i].noTradeAfter,
+                                              g_assets[i].forceCloseBefore);
 
       // ✅ CONFIGURAR STOPS ESPECÍFICOS POR SÍMBOLO (NOVOS VALORES)
       if (g_assets[i].symbol == "BIT$D")
@@ -425,6 +491,27 @@ int OnInit()
    {
       g_logger.Error("Falha ao configurar ativos");
       return (INIT_FAILED);
+   }
+
+   ParsedAssetCfg cfgs[];
+   int cfgCount = ParseAssetConfigJSON(AssetCfgJSON, cfgs);
+   for(int i=0;i<cfgCount;i++)
+   {
+      for(int j=0;j<ArraySize(g_assets);j++)
+      {
+         if(g_assets[j].symbol == cfgs[i].Symbol)
+         {
+            g_assets[j].riskPercentage   = cfgs[i].RiskPercent;
+            g_assets[j].maxStopPoints    = cfgs[i].MaxStopPoints;
+            g_assets[j].atrMultiplier    = cfgs[i].ATRMultiplier;
+            g_assets[j].maxVolPercent    = cfgs[i].MaxVolPercent;
+            g_assets[j].maxEntrySlippage = cfgs[i].MaxEntrySlippage;
+            g_assets[j].noTradeAfter     = cfgs[i].NoTradeAfter;
+         g_assets[j].forceCloseBefore = cfgs[i].ForceCloseBefore;
+      }
+   }
+
+   WarmUpHistory();
    }
 
    // Inicializar pool de handles
@@ -692,6 +779,24 @@ void OnTick()
       // Verificar se o ativo está habilitado
       if (!g_assets[i].enabled)
       {
+         continue;
+      }
+
+      int nowsec = TimeHour(TimeCurrent())*3600 + TimeMinute(TimeCurrent())*60;
+      int blockSec = HHMMToSeconds(g_assets[i].noTradeAfter);
+      if(blockSec>0 && nowsec >= blockSec)
+      {
+         g_logger.LogCategorized(LOG_SYSTEM_STATUS, LOG_LEVEL_INFO, symbol,
+                                 "NEW_ENTRIES_BLOCKED", "", "");
+         continue;
+      }
+
+      int forceSec = HHMMToSeconds(g_assets[i].forceCloseBefore);
+      if(forceSec>0 && nowsec >= forceSec)
+      {
+         g_logger.LogCategorized(LOG_SYSTEM_STATUS, LOG_LEVEL_WARNING, symbol,
+                                 "FORCE_CLOSE", "", "");
+         g_tradeExecutor.CloseAllPositions(symbol);
          continue;
       }
 

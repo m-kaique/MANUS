@@ -100,6 +100,14 @@ private:
       ASSET_TYPE assetType;                    // Tipo de ativo detectado
       LotCharacteristics lotChar;              // Características de lote
       AdaptivePartialConfig lastPartialConfig; // Última configuração aplicada
+
+      // ==== NOVOS CAMPOS DE RISCO E SESSÃO ====
+      double  maxStopPoints;
+      double  atrMultiplierLimit;
+      double  maxVolPercent;
+      double  maxEntrySlippage;
+      string  noTradeAfter;
+      string  forceCloseBefore;
    };
    
    // Array de parâmetros por símbolo
@@ -180,11 +188,16 @@ public:
    bool AddSymbol(string symbol, double riskPercentage, double maxLotSize);
    bool ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier);
    bool ConfigureSymbolPartials(string symbol, bool usePartials, double &levels[], double &volumes[]);
+   bool ConfigureSymbolRiskLimits(string symbol, double maxStop, double atrMult, double maxVol, double slippage,
+                                  string noTradeAfter="", string forceCloseBefore="");
    
    // ✅ NOVOS MÉTODOS PARA CONFIGURAÇÃO DE PARCIAIS UNIVERSAIS
    bool ConfigureUniversalPartials(string symbol, PARTIAL_STRATEGY strategy, double minVolume, 
                                   bool allowScaling, double maxScaling);
    bool AutoConfigureSymbol(string symbol);
+
+   bool ClampStopAndLot(string symbol, ENUM_ORDER_TYPE type, SETUP_QUALITY quality,
+                        double entryPrice, double &stopLoss);
    
    // ✅ MÉTODOS PARA CÁLCULO DE RISCO ORIGINAIS MANTIDOS
    OrderRequest BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase);
@@ -344,11 +357,17 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
    m_symbolParams[size].usePartials = false;
    
    // ✅ INICIALIZAR NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS
-   m_symbolParams[size].partialStrategy = PARTIAL_STRATEGY_ORIGINAL;
-   m_symbolParams[size].minVolumeForPartials = 0.0;
-   m_symbolParams[size].allowVolumeScaling = false;
-   m_symbolParams[size].maxScalingFactor = 3.0;
-   m_symbolParams[size].assetType = ASSET_UNKNOWN;
+  m_symbolParams[size].partialStrategy = PARTIAL_STRATEGY_ORIGINAL;
+  m_symbolParams[size].minVolumeForPartials = 0.0;
+  m_symbolParams[size].allowVolumeScaling = false;
+  m_symbolParams[size].maxScalingFactor = 3.0;
+  m_symbolParams[size].assetType = ASSET_UNKNOWN;
+  m_symbolParams[size].maxStopPoints    = 0.0;
+  m_symbolParams[size].atrMultiplierLimit = 0.0;
+  m_symbolParams[size].maxVolPercent    = 100.0;
+  m_symbolParams[size].maxEntrySlippage = 0.0;
+  m_symbolParams[size].noTradeAfter     = "";
+  m_symbolParams[size].forceCloseBefore = "";
    
    // Inicializar arrays de parciais
    double tempLevels[3] = {1.0, 2.0, 3.0};
@@ -565,6 +584,25 @@ bool CRiskManager::AutoConfigureSymbol(string symbol) {
                                 m_symbolParams[index].maxScalingFactor));
    }
    
+  return true;
+}
+
+//+------------------------------------------------------------------+
+//| Configurar limites adicionais de risco                           |
+//+------------------------------------------------------------------+
+bool CRiskManager::ConfigureSymbolRiskLimits(string symbol, double maxStop, double atrMult, double maxVol, double slippage,
+                                             string noTradeAfter, string forceCloseBefore)
+{
+   int index = FindSymbolIndex(symbol);
+   if(index < 0)
+      return false;
+
+   m_symbolParams[index].maxStopPoints    = maxStop;
+   m_symbolParams[index].atrMultiplierLimit = atrMult;
+   m_symbolParams[index].maxVolPercent    = maxVol;
+   m_symbolParams[index].maxEntrySlippage = slippage;
+   m_symbolParams[index].noTradeAfter     = noTradeAfter;
+   m_symbolParams[index].forceCloseBefore = forceCloseBefore;
    return true;
 }
 
@@ -1781,7 +1819,16 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    }
    
    // Validar stop loss com regras adicionais
-   if(!ValidateStopLoss(symbol, request.type, request.price, request.stopLoss)) {
+   if(!ValidateStopLoss(symbol, request.type, request.price, request.stopLoss))
+   {
+      request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
+      return request;
+   }
+
+   if(!ClampStopAndLot(this, symbol, request.type, signal.quality, request.price, request.stopLoss))
+   {
       request.volume = 0;
       if(m_circuitBreaker != NULL)
          m_circuitBreaker.RegisterError();
@@ -1791,6 +1838,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
    double riskPercentage = (index >= 0) ? m_symbolParams[index].riskPercentage : m_defaultRiskPercentage;
+   if(index >= 0)
+      request.maxSlippage = m_symbolParams[index].maxEntrySlippage;
    
    // ✅ CALCULAR VOLUME BASE
   double baseVolume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
@@ -1967,10 +2016,21 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    if(index >= 0 && m_symbolParams[index].maxLotSize > 0) {
       if(request.volume > m_symbolParams[index].maxLotSize) {
          if(m_logger != NULL) {
-            m_logger.Warning(StringFormat("Volume limitado para %s: %.2f → %.2f lotes (máximo configurado)", 
+            m_logger.Warning(StringFormat("Volume limitado para %s: %.2f → %.2f lotes (máximo configurado)",
                                         symbol, request.volume, m_symbolParams[index].maxLotSize));
          }
          request.volume = m_symbolParams[index].maxLotSize;
+      }
+   }
+
+   if(index >= 0 && m_symbolParams[index].maxVolPercent > 0) {
+      double limitVol = m_symbolParams[index].maxLotSize * m_symbolParams[index].maxVolPercent / 100.0;
+      if(limitVol > 0 && request.volume > limitVol) {
+         if(m_logger != NULL)
+            m_logger.LogCategorized(LOG_RISK_MANAGEMENT, LOG_LEVEL_INFO, symbol,
+                                   "LOT_REDUCED",
+                                   StringFormat("%.2f->%.2f", request.volume, limitVol), "");
+         request.volume = limitVol;
       }
    }
    
@@ -2117,5 +2177,6 @@ double CRiskManager::GetCurrentTotalRisk() {
 
 #include "PositionSizing.mqh"
 #include "RiskValidation.mqh"
+#include "ClampStop.mqh"
 #endif // RISKMANAGER_MQH
 

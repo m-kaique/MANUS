@@ -276,6 +276,14 @@ struct AssetParams
    LotCharacteristics lotChar;              // Características de lote
    AdaptivePartialConfig lastPartialConfig; // Última configuração aplicada
 
+   // ==== NOVOS CAMPOS DE RISCO E SESSÃO ====
+   double  maxStopPoints;      // Teto absoluto de stop em pontos
+   double  atrMultiplier;      // Multiplicador de ATR para limite dinâmico
+   double  maxVolPercent;      // Percentual máximo de volume permitido
+   double  maxEntrySlippage;   // Slippage máximo aceitável (pontos)
+   string  noTradeAfter;       // Horário limite para novas entradas
+   string  forceCloseBefore;   // Horário de fechamento forçado
+
    // Construtor com valores padrão
    AssetParams()
    {
@@ -299,6 +307,13 @@ struct AssetParams
       allowVolumeScaling = false;
       maxScalingFactor = 3.0;
       assetType = ASSET_UNKNOWN;
+
+      maxStopPoints    = 0.0;
+      atrMultiplier    = 0.0;
+      maxVolPercent    = 100.0;
+      maxEntrySlippage = 0.0;
+      noTradeAfter     = "";
+      forceCloseBefore = "";
    }
 };
 
@@ -369,6 +384,7 @@ struct OrderRequest
    datetime expiration;  // Data de expiração (para ordens pendentes)
    int signalId;         // ID do sinal que gerou a ordem
    bool isProcessed;     // Indica se a requisição foi processada
+   double maxSlippage;   // Desvio máximo aceitável
 
    // Construtor com valores padrão
    OrderRequest()
@@ -384,6 +400,7 @@ struct OrderRequest
       expiration = 0;
       signalId = 0;
       isProcessed = false;
+      maxSlippage = 0.0;
    }
 };
 

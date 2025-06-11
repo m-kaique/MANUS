@@ -110,6 +110,17 @@ ENUM_TIMEFRAMES GetLowerTimeframe(ENUM_TIMEFRAMES timeframe) {
    }
 }
 
+// Converter string HH:MM para segundos desde 00:00
+int HHMMToSeconds(string hhmm)
+{
+   string parts[];
+   if(StringSplit(hhmm, ':', parts) != 2)
+      return -1;
+   int h = (int)StringToInteger(parts[0]);
+   int m = (int)StringToInteger(parts[1]);
+   return h*3600 + m*60;
+}
+
 //+------------------------------------------------------------------+
 //| Definições de Constantes                                         |
 //+------------------------------------------------------------------+
