@@ -25,8 +25,6 @@
 #include "DrawdownController.mqh"
 #include "../Core/MetricsCollector.mqh"
 #include "PartialManager.mqh"
-#include "PositionSizing.mqh"
-#include "RiskValidation.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -162,6 +160,9 @@ private:
    double GetScalingTier(SETUP_QUALITY quality, double requiredFactor, double maxFactor);
    double CalculateRiskBasedScaling(SETUP_QUALITY quality, double baseScaling);
    bool   ValidateSetupForScaling(SETUP_QUALITY quality, double requestedScaling);
+   double GetMaxVolumeBySymbol(string symbol, double proposedVolume);
+   bool   IsVolumeOutlier(double volume, string symbol);
+   bool   ValidateVolumeByEquity(double volume, string symbol);
 
 public:
    // ✅ CONSTRUTORES E DESTRUTOR ORIGINAIS MANTIDOS
@@ -1592,6 +1593,47 @@ bool CRiskManager::ValidateSetupForScaling(SETUP_QUALITY quality, double request
       return(false);
    }
    return(true);
+}
+
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: GetMaxVolumeBySymbol                        |
+//| Retorna o volume máximo permitido para o símbolo                |
+//+------------------------------------------------------------------+
+double CRiskManager::GetMaxVolumeBySymbol(string symbol, double proposedVolume)
+{
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   if(maxLot <= 0.0)
+      maxLot = proposedVolume * 100.0; // fallback generoso
+   return maxLot;
+}
+
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: IsVolumeOutlier                             |
+//| Detecta volumes muito acima do permitido                        |
+//+------------------------------------------------------------------+
+bool CRiskManager::IsVolumeOutlier(double volume, string symbol)
+{
+   double maxLot = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   if(maxLot <= 0.0)
+      return false;
+   return (volume > maxLot * 1.2);
+}
+
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: ValidateVolumeByEquity                       |
+//| Garante que o volume não exceda 10% da equity                    |
+//+------------------------------------------------------------------+
+bool CRiskManager::ValidateVolumeByEquity(double volume, string symbol)
+{
+   double price        = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   double equity       = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   if(price <= 0.0 || contractSize <= 0.0 || equity <= 0.0)
+      return true;
+
+   double required = volume * price * contractSize;
+   return (required <= equity * 0.10);
 }
 
 //+------------------------------------------------------------------+
