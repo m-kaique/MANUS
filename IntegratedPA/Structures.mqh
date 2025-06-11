@@ -48,6 +48,23 @@ enum ENUM_LOG_LEVEL
 };
 
 //+------------------------------------------------------------------+
+//| Categorias de log estruturado                                   |
+//+------------------------------------------------------------------+
+enum ENUM_LOG_CATEGORY
+{
+   LOG_VOLUME_SCALING,     // Decisões de escalonamento de volume
+   LOG_CIRCUIT_BREAKER,    // Ativações do circuit breaker
+   LOG_VOLATILITY_ADJUST,  // Ajustes de volatilidade
+   LOG_DRAWDOWN_CONTROL,   // Intervenções de drawdown
+   LOG_QUALITY_CORRELATION,// Correlação de qualidade de setup
+   LOG_RISK_MANAGEMENT,    // Gestão de risco geral
+   LOG_TRADE_EXECUTION,    // Eventos de execução de trades
+   LOG_SYSTEM_STATUS,      // Status e integridade do sistema
+   LOG_ERROR_HANDLING,     // Tratamento de erros
+   LOG_PERFORMANCE         // Métricas de performance
+};
+
+//+------------------------------------------------------------------+
 //| ✅ SISTEMA DE PARCIAIS UNIVERSAL - Enumerações                  |
 //+------------------------------------------------------------------+
 
@@ -177,6 +194,54 @@ struct PartialMetrics
       avgVolumeIncrease = 0.0;
       avgPartialEfficiency = 0.0;
       lastReset = TimeCurrent();
+   }
+};
+
+//+------------------------------------------------------------------+
+//| Estrutura para Métricas de Correção                             |
+//+------------------------------------------------------------------+
+struct CorrectionMetrics
+{
+   // Scaling metrics
+   int      totalScalings;
+   int      scalingsA_Plus;
+   int      scalingsA;
+   int      scalingsB;
+   int      scalingsC;
+
+   // Volume metrics
+   double   avgVolumeBeforeCorrection;
+   double   avgVolumeAfterCorrection;
+   double   maxVolumeRecorded;
+   int      outliersPrevented;
+
+   // Control metrics
+   int      drawdownInterventions;
+   int      volatilityAdjustments;
+   int      circuitBreakerActivations;
+
+   // Timing
+   datetime metricsStartTime;
+   datetime lastReset;
+   datetime lastReport;
+
+   CorrectionMetrics()
+   {
+      totalScalings              = 0;
+      scalingsA_Plus             = 0;
+      scalingsA                  = 0;
+      scalingsB                  = 0;
+      scalingsC                  = 0;
+      avgVolumeBeforeCorrection  = 0.0;
+      avgVolumeAfterCorrection   = 0.0;
+      maxVolumeRecorded          = 0.0;
+      outliersPrevented          = 0;
+      drawdownInterventions      = 0;
+      volatilityAdjustments      = 0;
+      circuitBreakerActivations  = 0;
+      metricsStartTime           = TimeCurrent();
+      lastReset                  = TimeCurrent();
+      lastReport                 = 0;
    }
 };
 

@@ -57,7 +57,7 @@ input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualid
 //| Variáveis globais                                                |
 //+------------------------------------------------------------------+
 // Objetos globais
-CLogger *g_logger = NULL;
+CStructuredLogger *g_logger = NULL;
 CHandlePool *g_handlePool = NULL;                               // ← NOVO: Pool global de handles
 CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
@@ -385,7 +385,7 @@ bool ConfigureRiskParameters()
 int OnInit()
 {
    // Inicializar o logger primeiro para registrar todo o processo
-   g_logger = new CLogger();
+   g_logger = new CStructuredLogger();
    if (g_logger == NULL)
    {
       Print("Erro ao criar objeto Logger");

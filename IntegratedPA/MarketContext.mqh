@@ -54,6 +54,7 @@ public:
    MARKET_PHASE DetermineMarketPhase();
    MARKET_PHASE GetCurrentPhase() { return m_currentPhase; }
    bool HasValidData() { return m_hasValidData; }
+   CHandlePool* GetHandlePool() { return m_handlePool; }
    bool UpdateMarketDepth(string symbol);
 
    // Métodos para verificação de fases de mercado específicas

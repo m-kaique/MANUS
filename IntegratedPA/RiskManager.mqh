@@ -18,8 +18,12 @@
 #include "Structures.mqh"
 #include "Logger.mqh"
 #include "MarketContext.mqh"
+#include "Indicators/IndicatorHandlePool.mqh"
 #include "Constants.mqh"
 #include "CircuitBreaker.mqh"
+#include "VolatilityAdjuster.mqh"
+#include "DrawdownController.mqh"
+#include "MetricsCollector.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -62,9 +66,10 @@ SETUP_QUALITY EvaluateSetupQuality(int factors, double riskReward)
 class CRiskManager {
 private:
    // Objetos internos
-   CLogger*        m_logger;
+   CStructuredLogger* m_logger;
    CMarketContext* m_marketContext;
    CCircuitBreaker *m_circuitBreaker;
+   CHandlePool    *m_handlePool;
    
    // Configurações gerais
    double          m_defaultRiskPercentage;
@@ -101,6 +106,7 @@ private:
    
    // ✅ MÉTRICAS DE PERFORMANCE PARA PARCIAIS UNIVERSAIS
    PartialMetrics m_partialMetrics;
+   CMetricsCollector *m_metricsCollector;
 
    // ✅ NOVA ESTRUTURA: Tiers de escalonamento por qualidade de setup
    struct QualityScalingTiers {
@@ -130,9 +136,10 @@ private:
    PARTIAL_STRATEGY DetermineOptimalStrategy(string symbol, double volume, 
                                            LotCharacteristics &lotChar, 
                                            double &percentages[], int numPartials);
-   AdaptivePartialConfig ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config, 
-                                           LotCharacteristics &lotChar, 
-                                           double &percentages[], int numPartials);
+   AdaptivePartialConfig ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config,
+                                           LotCharacteristics &lotChar,
+                                           double &percentages[], int numPartials,
+                                           SETUP_QUALITY quality);
    AdaptivePartialConfig ApplyAdaptiveStrategy(string symbol, AdaptivePartialConfig &config, 
                                              LotCharacteristics &lotChar, 
                                              double &percentages[], int numPartials);
@@ -159,7 +166,7 @@ public:
    ~CRiskManager();
    
    // ✅ MÉTODOS DE INICIALIZAÇÃO ORIGINAIS MANTIDOS
-   bool Initialize(CLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker=NULL);
+   bool Initialize(CStructuredLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker=NULL);
    
    // ✅ MÉTODOS DE CONFIGURAÇÃO ORIGINAIS MANTIDOS
    void SetDefaultRiskPercentage(double percentage) { m_defaultRiskPercentage = percentage; }
@@ -269,6 +276,8 @@ CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRi
    m_accountBalance = 0;
    m_accountEquity = 0;
    m_accountFreeMargin = 0;
+
+   m_metricsCollector = new CMetricsCollector();
    
    // ✅ INICIALIZAR MÉTRICAS DE PARCIAIS
    m_partialMetrics.lastReset = TimeCurrent();
@@ -297,13 +306,17 @@ CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRi
 //| Destrutor                                                        |
 //+------------------------------------------------------------------+
 CRiskManager::~CRiskManager() {
-   // Nada a liberar, apenas objetos referenciados
+   if(m_metricsCollector != NULL)
+   {
+      delete m_metricsCollector;
+      m_metricsCollector = NULL;
+   }
 }
 
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker) {
+bool CRiskManager::Initialize(CStructuredLogger* logger, CMarketContext* marketContext, CCircuitBreaker *circuitBreaker) {
    // Verificar parâmetros
    if(logger == NULL || marketContext == NULL) {
       Print("CRiskManager::Initialize - Logger ou MarketContext não podem ser NULL");
@@ -314,6 +327,7 @@ bool CRiskManager::Initialize(CLogger* logger, CMarketContext* marketContext, CC
    m_logger = logger;
    m_marketContext = marketContext;
    m_circuitBreaker = circuitBreaker;
+   m_handlePool = (marketContext != NULL) ? marketContext.GetHandlePool() : NULL;
    
    m_logger.Info("Inicializando RiskManager com Sistema de Parciais Universal");
    
@@ -767,7 +781,7 @@ AdaptivePartialConfig CRiskManager::CalculateUniversalPartials(string symbol, do
          break;
          
       case PARTIAL_STRATEGY_SCALED:
-         config = ApplyScaledStrategy(symbol, config, lotChar, originalPercentages, numPartials);
+         config = ApplyScaledStrategy(symbol, config, lotChar, originalPercentages, numPartials, quality);
          break;
          
       case PARTIAL_STRATEGY_ADAPTIVE:
@@ -898,9 +912,10 @@ PARTIAL_STRATEGY CRiskManager::DetermineOptimalStrategy(string symbol, double vo
 //| Aplica estratégia de volume escalado com verificações extras    |
 //| (limites por símbolo, detecção de outliers e controle por equity)|
 //+------------------------------------------------------------------+
-AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config, 
-                                                       LotCharacteristics &lotChar, 
-                                                       double &percentages[], int numPartials)
+AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config,
+                                                       LotCharacteristics &lotChar,
+                                                       double &percentages[], int numPartials,
+                                                       SETUP_QUALITY quality)
 {
    // ✅ CORREÇÃO #1: Encontrar menor percentual com validação
    double smallestPercentage = 1.0;
@@ -976,6 +991,8 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
       if(m_logger != NULL)
          m_logger.Warning(StringFormat("⚠️ Volume %.2f para %s considerado outlier. Reduzindo.",
                                       finalCandidate, symbol));
+      if(m_metricsCollector != NULL)
+         m_metricsCollector.RecordOutlierPrevention(finalCandidate, config.originalVolume);
       finalCandidate = config.originalVolume;
    }
 
@@ -989,10 +1006,15 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
       if(m_logger != NULL)
          m_logger.Warning(StringFormat("⚠️ Volume %.2f para %s excede 10%% da equity. Limitado a %.2f",
                                       finalCandidate, symbol, equityLimit));
-      finalCandidate = MathMin(finalCandidate, equityLimit);
+      double limited = MathMin(finalCandidate, equityLimit);
+      if(m_metricsCollector != NULL && limited < finalCandidate)
+         m_metricsCollector.RecordVolumeAdjustment(finalCandidate, limited, "Equity Limit");
+      finalCandidate = limited;
    }
 
    config.finalVolume = finalCandidate;
+   if(m_metricsCollector != NULL && config.finalVolume < config.originalVolume)
+      m_metricsCollector.RecordVolumeAdjustment(config.originalVolume, config.finalVolume, "Scaled Limit");
    config.volumeWasScaled = (config.finalVolume > config.originalVolume);
    
    // ✅ PROTEÇÃO: Evitar divisão por zero
@@ -1011,9 +1033,9 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
    // ✅ LOG DETALHADO PARA DEBUGGING
    if (m_logger != NULL)
    {
-      m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (fator: %.1fx) para permitir parciais", 
-                                symbol, config.originalVolume, config.finalVolume, config.scalingFactor));
-      m_logger.Debug(StringFormat("📊 DETALHES: menor percentual: %.3f%%, volume mínimo calculado: %.2f", 
+      m_logger.LogVolumeScaling(symbol, quality, config.originalVolume, config.finalVolume,
+                               "Partial scaling");
+      m_logger.Debug(StringFormat("📊 DETALHES: menor percentual: %.3f%%, volume mínimo calculado: %.2f",
                                 smallestPercentage * 100, minVolumeNeeded));
    }
    
@@ -1905,11 +1927,16 @@ bool CRiskManager::ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double 
 OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase) {
    OrderRequest request;
 
+   if(m_metricsCollector != NULL && TimeCurrent() - m_metricsCollector.GetLastReportTime() >= 86400)
+      m_metricsCollector.GenerateReport();
+
    if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate()) {
       if(m_logger != NULL)
-         m_logger.Warning("BuildRequest bloqueado pelo Circuit Breaker");
+         m_logger.LogCircuitBreaker(symbol, "BLOCKED", 0, "Breaker active");
       request.volume = 0;
       m_circuitBreaker.RegisterError();
+      if(m_metricsCollector != NULL)
+         m_metricsCollector.RecordCircuitBreakerActivation();
       return request;
    }
    
@@ -1988,9 +2015,9 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    double riskPercentage = (index >= 0) ? m_symbolParams[index].riskPercentage : m_defaultRiskPercentage;
    
    // ✅ CALCULAR VOLUME BASE
-   double baseVolume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
-   
-   if(baseVolume <= 0) {
+  double baseVolume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
+
+  if(baseVolume <= 0) {
       if(m_logger != NULL) {
          m_logger.Error("RiskManager: Volume calculado inválido para " + symbol);
       }
@@ -1998,8 +2025,52 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       if(m_circuitBreaker != NULL)
          m_circuitBreaker.RegisterError();
       return request;
+  }
+
+   // Controle automático de drawdown
+   CDrawdownController *ddController = new CDrawdownController();
+   ddController.UpdateDrawdownStatus();
+
+   if(!ddController.IsTradingAllowed())
+   {
+      if(m_logger != NULL)
+         m_logger.Warning("Trading paused due to excessive drawdown");
+      request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
+      delete ddController;
+      return request;
    }
-   
+
+   double ddAdjustment = ddController.GetVolumeAdjustment();
+   baseVolume         *= ddAdjustment;
+   if(m_metricsCollector != NULL && ddAdjustment < 1.0)
+      m_metricsCollector.RecordDrawdownIntervention(ddController.GetCurrentDrawdown(), ddAdjustment);
+
+   if(m_logger != NULL)
+      m_logger.LogDrawdownControl(ddController.GetCurrentDrawdown(),
+                                  ddController.GetCurrentLevel(),
+                                  ddAdjustment,
+                                  ddController.IsTradingAllowed() ? "CONTINUE" : "PAUSE");
+   delete ddController;
+
+   // Adjust position size based on market volatility
+   if(m_handlePool != NULL)
+   {
+      CVolatilityAdjuster volatilityAdjuster(m_handlePool);
+      volatilityAdjuster.UpdateBaseline(symbol);
+      double volatilityFactor = volatilityAdjuster.CalculateVolatilityAdjustment(symbol);
+      double currentATR       = volatilityAdjuster.GetCurrentATR(symbol);
+      double baseline         = volatilityAdjuster.GetBaselineVolatility(symbol);
+      double beforeVol        = baseVolume;
+      baseVolume             *= volatilityFactor;
+      if(m_metricsCollector != NULL && volatilityFactor != 1.0)
+         m_metricsCollector.RecordVolumeAdjustment(beforeVol, baseVolume, "Volatility");
+
+      if(m_logger != NULL)
+         m_logger.LogVolatilityAdjustment(symbol, currentATR, baseline, volatilityFactor, "");
+   }
+
    // ✅ NOVA LÓGICA: GARANTIR VOLUME ADEQUADO PARA PARCIAIS
    if(index >= 0 && m_symbolParams[index].usePartials) {
       
@@ -2022,8 +2093,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
                baseVolume = originalVolume * tier;
 
                if(m_logger != NULL) {
-                  m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (tier %.1fx)",
-                                           symbol, originalVolume, baseVolume, tier));
+                  m_logger.LogVolumeScaling(symbol, signal.quality, originalVolume, baseVolume,
+                                         "Tier selection");
 
                   double qualityLimit = 1.0;
                   switch(signal.quality) {
@@ -2127,7 +2198,10 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    
    // Ajustar para lotes válidos
    request.volume = AdjustLotSize(symbol, request.volume);
-   
+
+   if(m_metricsCollector != NULL)
+      m_metricsCollector.RecordScaling(signal.quality, request.volume);
+
    // Validação final
    if(request.volume <= 0) {
       if(m_logger != NULL) {

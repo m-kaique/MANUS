@@ -403,3 +403,102 @@ void CLogger::SendAlert(string message, bool notifyTerminal = true, bool sendEma
    // Registrar alerta no log
    Info("ALERT: " + message);
 }
+
+//+------------------------------------------------------------------+
+//| Structured Logger com categorias                                 |
+//+------------------------------------------------------------------+
+class CStructuredLogger : public CLogger
+{
+private:
+   bool           m_enabledCategories[10];
+   string         m_logFile;
+   ENUM_LOG_LEVEL m_minLevel;
+
+public:
+   CStructuredLogger(string logFile="EA_StructuredLog.txt") : CLogger(logFile), m_logFile(logFile)
+   {
+      m_minLevel = LOG_LEVEL_INFO;
+      for(int i=0;i<10;i++)
+         m_enabledCategories[i] = true;
+   }
+
+   void SetCategoryEnabled(ENUM_LOG_CATEGORY category, bool enabled)
+   {
+      if(category>=0 && category<10)
+         m_enabledCategories[category] = enabled;
+   }
+
+   void SetMinLevel(ENUM_LOG_LEVEL level) { m_minLevel = level; }
+
+   void LogCategorized(ENUM_LOG_CATEGORY category, ENUM_LOG_LEVEL level,
+                       string symbol, string action, string values, string reason)
+   {
+      if(category<0 || category>=10) return;
+      if(!m_enabledCategories[category] || level < m_minLevel) return;
+
+      string categoryStr = EnumToString(category);
+      string levelStr    = EnumToString(level);
+      string timestamp   = TimeToString(TimeCurrent(), TIME_SECONDS);
+
+      string logMessage = StringFormat("[%s] [%s] [%s] [%s] %s | %s | Reason: %s",
+                                       timestamp, levelStr, categoryStr,
+                                       symbol, action, values, reason);
+
+      Print(logMessage);
+
+      int file = FileOpen(m_logFile, FILE_WRITE|FILE_READ|FILE_TXT);
+      if(file != INVALID_HANDLE)
+      {
+         FileSeek(file, 0, SEEK_END);
+         FileWrite(file, logMessage);
+         FileClose(file);
+      }
+   }
+
+   void LogVolumeScaling(string symbol, SETUP_QUALITY quality,
+                          double originalVolume, double scaledVolume, string reason)
+   {
+      string action = "VOLUME_SCALED";
+      string values = StringFormat("Original=%.2f, Scaled=%.2f, Quality=%s, Factor=%.2fx",
+                                   originalVolume, scaledVolume,
+                                   EnumToString(quality),
+                                   originalVolume>0 ? scaledVolume/originalVolume : 0.0);
+      LogCategorized(LOG_VOLUME_SCALING, LOG_LEVEL_INFO, symbol, action, values, reason);
+   }
+
+   void LogCircuitBreaker(string symbol, string action, int errorCount, string reason)
+   {
+      string values = StringFormat("ErrorCount=%d, Threshold=3", errorCount);
+      LogCategorized(LOG_CIRCUIT_BREAKER, LOG_LEVEL_WARNING, symbol, action, values, reason);
+   }
+
+   void LogVolatilityAdjustment(string symbol, double atr, double baseline,
+                                double adjustment, string reason)
+   {
+      string action = "VOLATILITY_ADJUSTED";
+      string values = StringFormat("ATR=%.5f, Baseline=%.5f, Adjustment=%.2fx, Ratio=%.2f",
+                                   atr, baseline, adjustment,
+                                   baseline>0 ? atr/baseline : 0.0);
+      LogCategorized(LOG_VOLATILITY_ADJUST, LOG_LEVEL_INFO, symbol, action, values, reason);
+   }
+
+   void LogDrawdownControl(double drawdownPercent, ENUM_DRAWDOWN_LEVEL level,
+                           double volumeAdjustment, string action)
+   {
+      string values = StringFormat("DD=%.2f%%, Level=%s, VolumeAdj=%.2fx",
+                                   drawdownPercent, EnumToString(level), volumeAdjustment);
+      LogCategorized(LOG_DRAWDOWN_CONTROL, LOG_LEVEL_WARNING, "ACCOUNT",
+                     action, values, "Drawdown protection activated");
+   }
+
+   void LogQualityCorrelation(string symbol, SETUP_QUALITY quality,
+                              int factors, double riskReward, double maxScaling)
+   {
+      string action = "QUALITY_EVALUATED";
+      string values = StringFormat("Quality=%s, Factors=%d, R:R=%.2f, MaxScaling=%.1fx",
+                                   EnumToString(quality), factors, riskReward, maxScaling);
+      LogCategorized(LOG_QUALITY_CORRELATION, LOG_LEVEL_INFO, symbol, action, values,
+                     "Setup quality determined risk parameters");
+   }
+};
+
