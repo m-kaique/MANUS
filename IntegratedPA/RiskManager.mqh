@@ -66,6 +66,13 @@ private:
    
    // ✅ MÉTRICAS DE PERFORMANCE PARA PARCIAIS UNIVERSAIS
    PartialMetrics m_partialMetrics;
+
+   // ✅ NOVA ESTRUTURA: Tiers de escalonamento por qualidade de setup
+   struct QualityScalingTiers {
+      double tiers[5];
+      int    count;
+   };
+   QualityScalingTiers m_qualityScaling[5];
    
    // ✅ MÉTODOS PRIVADOS ORIGINAIS MANTIDOS
    double CalculatePositionSize(string symbol, double entryPrice, double stopLoss, double riskPercentage);
@@ -105,6 +112,7 @@ private:
    // ✅ FUNÇÕES AUXILIARES
    void LogPartialDecision(string symbol, AdaptivePartialConfig &config);
    void UpdatePartialMetrics(AdaptivePartialConfig &config);
+   double GetScalingTier(SETUP_QUALITY quality, double requiredFactor, double maxFactor);
 
 public:
    // ✅ CONSTRUTORES E DESTRUTOR ORIGINAIS MANTIDOS
@@ -167,6 +175,25 @@ CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRi
    
    // ✅ INICIALIZAR MÉTRICAS DE PARCIAIS
    m_partialMetrics.lastReset = TimeCurrent();
+
+   // ✅ CONFIGURAR TIERS DE ESCALONAMENTO POR QUALIDADE
+   m_qualityScaling[SETUP_INVALID].tiers[0] = 1.0;
+   m_qualityScaling[SETUP_INVALID].count = 1;
+
+   double tiersAPlus[4] = {2.0, 3.0, 4.0, 5.0};
+   for(int i=0;i<4;i++) m_qualityScaling[SETUP_A_PLUS].tiers[i] = tiersAPlus[i];
+   m_qualityScaling[SETUP_A_PLUS].count = 4;
+
+   double tiersA[3] = {2.0, 3.0, 4.0};
+   for(int i=0;i<3;i++) m_qualityScaling[SETUP_A].tiers[i] = tiersA[i];
+   m_qualityScaling[SETUP_A].count = 3;
+
+   double tiersB[2] = {2.0, 3.0};
+   for(int i=0;i<2;i++) m_qualityScaling[SETUP_B].tiers[i] = tiersB[i];
+   m_qualityScaling[SETUP_B].count = 2;
+
+   m_qualityScaling[SETUP_C].tiers[0] = 2.0;
+   m_qualityScaling[SETUP_C].count = 1;
 }
 
 //+------------------------------------------------------------------+
@@ -1379,6 +1406,26 @@ void CRiskManager::ResetPartialMetrics()
 }
 
 //+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: GetScalingTier                              |
+//| Retorna o menor tier permitido que atenda ao fator requerido    |
+//+------------------------------------------------------------------+
+double CRiskManager::GetScalingTier(SETUP_QUALITY quality, double requiredFactor, double maxFactor)
+{
+   int qIndex = (int)quality;
+   if (qIndex < 0 || qIndex >= ArraySize(m_qualityScaling))
+      qIndex = 0; // SETUP_INVALID
+
+   for (int i = 0; i < m_qualityScaling[qIndex].count; i++)
+   {
+      double tier = m_qualityScaling[qIndex].tiers[i];
+      if (tier >= requiredFactor && tier <= maxFactor)
+         return tier;
+   }
+
+   return 0.0; // Nenhum tier adequado encontrado
+}
+
+//+------------------------------------------------------------------+
 //| ✅ FUNÇÃO: GetPartialReport                                    |
 //| Gera relatório de parciais para um símbolo                      |
 //+------------------------------------------------------------------+
@@ -1713,25 +1760,25 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          
          double originalVolume = baseVolume;
          
-         // ✅ ESTRATÉGIA 1: Escalonamento automático se permitido
+         // ✅ ESTRATÉGIA 1: Escalonamento automático por tiers se permitido
          if(m_symbolParams[index].allowVolumeScaling) {
-            
-            double scalingFactor = minVolumeForPartials / baseVolume;
-            
-            // Limitar escalonamento ao fator máximo configurado
-            if(scalingFactor <= m_symbolParams[index].maxScalingFactor) {
-               baseVolume = minVolumeForPartials;
-               
+
+            double requiredFactor = minVolumeForPartials / baseVolume;
+            double tier = GetScalingTier(signal.quality, requiredFactor, m_symbolParams[index].maxScalingFactor);
+
+            if(tier > 0) {
+               baseVolume = originalVolume * tier;
+
                if(m_logger != NULL) {
-                  m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (fator: %.1fx) para permitir parciais", 
-                                           symbol, originalVolume, baseVolume, scalingFactor));
+                  m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (tier %.1fx)",
+                                           symbol, originalVolume, baseVolume, tier));
                }
             } else {
                // ✅ ESTRATÉGIA 2: Escalonamento limitado
                baseVolume = originalVolume * m_symbolParams[index].maxScalingFactor;
-               
+
                if(m_logger != NULL) {
-                  m_logger.Warning(StringFormat("⚠️ VOLUME ESCALADO LIMITADO para %s: %.2f → %.2f lotes (máximo: %.1fx)", 
+                  m_logger.Warning(StringFormat("⚠️ VOLUME ESCALADO LIMITADO para %s: %.2f → %.2f lotes (máximo: %.1fx)",
                                               symbol, originalVolume, baseVolume, m_symbolParams[index].maxScalingFactor));
                }
             }
