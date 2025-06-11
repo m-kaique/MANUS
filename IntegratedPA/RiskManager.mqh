@@ -158,6 +158,64 @@ public:
 
 
 //+------------------------------------------------------------------+
+//| Helper functions for additional volume safety checks             |
+//+------------------------------------------------------------------+
+// These utilities enforce per-symbol limits and protect the account
+// from abnormal position sizes.
+
+// Calculate average tick volume for the current timeframe
+double GetAverageVolume(string symbol, int periods)
+{
+   long volumes[];
+   ArraySetAsSeries(volumes, true);
+
+   if (CopyTickVolume(symbol, PERIOD_CURRENT, 1, periods, volumes) <= 0)
+      return 0.0;
+
+   double sum = 0.0;
+   for (int i = 0; i < periods; i++)
+      sum += (double)volumes[i];
+
+   return sum / periods;
+}
+
+// Return the maximum volume allowed for a symbol based on broker limits
+double GetMaxVolumeBySymbol(string symbol, double originalVolume)
+{
+   double symbolMax = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   if(symbolMax <= 0)
+      symbolMax = originalVolume * 100.0;
+
+   double defaultLimit = originalVolume * 100.0;
+   return MathMin(symbolMax, defaultLimit);
+}
+
+// Identify if the proposed volume deviates strongly from recent averages
+bool IsVolumeOutlier(double proposedVolume, string symbol)
+{
+   double avgVol = GetAverageVolume(symbol, 20);
+   if(avgVol <= 0)
+      return false;
+
+   return (proposedVolume > avgVol * 3.0);
+}
+
+// Validate if position value stays below 10% of account equity
+bool ValidateVolumeByEquity(double volume, string symbol)
+{
+   double price        = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   if(price <= 0 || contractSize <= 0)
+      return true;
+
+   double positionValue = volume * contractSize * price;
+   double equity        = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   return (positionValue <= equity * 0.10);
+}
+
+
+//+------------------------------------------------------------------+
 //| ✅ IMPLEMENTAÇÃO - CONSTRUTORES E MÉTODOS ORIGINAIS MANTIDOS    |
 //+------------------------------------------------------------------+
 
@@ -769,7 +827,8 @@ PARTIAL_STRATEGY CRiskManager::DetermineOptimalStrategy(string symbol, double vo
 
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO CORRIGIDA: ApplyScaledStrategy                       |
-//| Aplica estratégia de volume escalado com proteções robustas     |
+//| Aplica estratégia de volume escalado com verificações extras    |
+//| (limites por símbolo, detecção de outliers e controle por equity)|
 //+------------------------------------------------------------------+
 AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config, 
                                                        LotCharacteristics &lotChar, 
@@ -816,27 +875,56 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
    // ✅ CORREÇÃO #3: Calcular volume mínimo com proteção contra overflow
    double minVolumeNeeded = lotChar.minLot / smallestPercentage;
    
-   // ✅ PROTEÇÃO: Limite máximo de escalonamento (100x o volume original)
-   double maxAllowedVolume = config.originalVolume * 100.0;
+   // ✅ PROTEÇÃO: Limite máximo por símbolo e broker
+   double maxAllowedVolume = GetMaxVolumeBySymbol(symbol, config.originalVolume);
    
    if (minVolumeNeeded > maxAllowedVolume)
    {
       config.enabled = false;
-      config.reason = StringFormat("Escalonamento excessivo necessário: %.1fx (máximo: 100x)", 
+      config.reason = StringFormat("Escalonamento excessivo necessário: %.1fx (máximo: 100x)",
                                   minVolumeNeeded / config.originalVolume);
       if (m_logger != NULL)
       {
-         m_logger.Warning(StringFormat("⚠️ ESCALONAMENTO LIMITADO para %s: %.2f → %.2f (seria %.2f)", 
+         m_logger.Warning(StringFormat("⚠️ ESCALONAMENTO LIMITADO para %s: %.2f → %.2f (seria %.2f)",
                                      symbol, config.originalVolume, maxAllowedVolume, minVolumeNeeded));
       }
       return config;
+   }
+   else if(m_logger != NULL && minVolumeNeeded > maxAllowedVolume*0.9)
+   {
+      m_logger.Warning(StringFormat("⚠️ Volume proposto para %s próximo ao limite: %.2f / %.2f",
+                                   symbol, minVolumeNeeded, maxAllowedVolume));
    }
    
    // ✅ CORREÇÃO #4: Arredondar para cima com validação
    minVolumeNeeded = MathCeil(minVolumeNeeded / lotChar.minLot) * lotChar.minLot;
    
    // ✅ CORREÇÃO #5: Aplicar escalonamento com validações
-   config.finalVolume = MathMax(config.originalVolume, minVolumeNeeded);
+   double finalCandidate = MathMax(config.originalVolume, minVolumeNeeded);
+
+   // Verificar outliers e limite por patrimônio
+   if(IsVolumeOutlier(finalCandidate, symbol))
+   {
+      if(m_logger != NULL)
+         m_logger.Warning(StringFormat("⚠️ Volume %.2f para %s considerado outlier. Reduzindo.",
+                                      finalCandidate, symbol));
+      finalCandidate = config.originalVolume;
+   }
+
+   if(!ValidateVolumeByEquity(finalCandidate, symbol))
+   {
+      double price = SymbolInfoDouble(symbol, SYMBOL_ASK);
+      double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+      double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+      double equityLimit = (price > 0 && contractSize > 0) ? (equity * 0.10) / (price * contractSize) : finalCandidate;
+
+      if(m_logger != NULL)
+         m_logger.Warning(StringFormat("⚠️ Volume %.2f para %s excede 10%% da equity. Limitado a %.2f",
+                                      finalCandidate, symbol, equityLimit));
+      finalCandidate = MathMin(finalCandidate, equityLimit);
+   }
+
+   config.finalVolume = finalCandidate;
    config.volumeWasScaled = (config.finalVolume > config.originalVolume);
    
    // ✅ PROTEÇÃO: Evitar divisão por zero
