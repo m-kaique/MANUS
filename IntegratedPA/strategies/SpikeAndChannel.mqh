@@ -8,11 +8,11 @@
 #property version "1.00"
 #property strict
 
-#include "../Structures.mqh"
-#include "../Utils.mqh"
-#include "../Logger.mqh"
-#include "../MarketContext.mqh"
-#include "../Constants.mqh"
+#include "../Core/Structures.mqh"
+#include "../Utils/Utils.mqh"
+#include "../Logging/Logger.mqh"
+#include "../Analysis/MarketContext.mqh"
+#include "../Core/Constants.mqh"
 
 //+------------------------------------------------------------------+
 //| Enumeração para Tipos de Entrada no Padrão Spike & Channel       |

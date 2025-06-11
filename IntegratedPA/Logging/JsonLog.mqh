@@ -6,6 +6,7 @@
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property version "1.00"
+#property strict
 
 #include "Logger.mqh"
 //+------------------------------------------------------------------+
