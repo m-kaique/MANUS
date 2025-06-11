@@ -10,7 +10,7 @@
 
 #include "../Structures.mqh"
 #include "../Utils.mqh"
-#include "../Logger.mqh"
+#include "../Logging/Logger.mqh"
 #include "../MarketContext.mqh"
 #include "../Constants.mqh"
 

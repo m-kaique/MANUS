@@ -11,11 +11,11 @@
 // Inclusão de bibliotecas necessárias
 #include <Trade/Trade.mqh>
 #include "Structures.mqh"
-#include "Logger.mqh"
-#include "JsonLog.mqh"
+#include "Logging/Logger.mqh"
+#include "Logging/JsonLog.mqh"
 #include "Constants.mqh"
 #include "MarketContext.mqh"
-#include "CircuitBreaker.mqh"
+#include "Risk/CircuitBreaker.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0

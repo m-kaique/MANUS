@@ -9,7 +9,7 @@
 #property strict
 
 #include "IndicatorHandle.mqh"
-#include "../Logger.mqh"
+#include "../Logging/Logger.mqh"
 #include "../Structures.mqh"
 
 //+------------------------------------------------------------------+

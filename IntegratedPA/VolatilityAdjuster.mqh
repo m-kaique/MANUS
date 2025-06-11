@@ -4,8 +4,9 @@
 //+------------------------------------------------------------------+
 #ifndef VOLATILITYADJUSTER_MQH
 #define VOLATILITYADJUSTER_MQH
+#property strict
 
-#include "Logger.mqh"
+#include "Logging/Logger.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
 
 //+------------------------------------------------------------------+

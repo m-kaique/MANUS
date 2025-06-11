@@ -21,13 +21,13 @@
 #include "Structures.mqh"
 #include "MarketContext.mqh"
 #include "SignalEngine.mqh"
-#include "RiskManager.mqh"
+#include "Risk/RiskManager.mqh"
 #include "TradeExecutor.mqh"
-#include "CircuitBreaker.mqh"
-#include "Logger.mqh"
+#include "Risk/CircuitBreaker.mqh"
+#include "Logging/Logger.mqh"
 #include "Utils.mqh"
 #include "SetupClassifier.mqh"
-#include "JsonLog.mqh"
+#include "Logging/JsonLog.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
 
 //+------------------------------------------------------------------+

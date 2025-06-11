@@ -9,7 +9,7 @@
 #property strict
 
 #include "Structures.mqh"
-#include "Logger.mqh"
+#include "Logging/Logger.mqh"
 #include "MarketContext.mqh"
 #include "Utils.mqh"
 

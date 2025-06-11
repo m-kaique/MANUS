@@ -1,5 +1,6 @@
 #ifndef DRAWDOWNCONTROLLER_MQH
 #define DRAWDOWNCONTROLLER_MQH
+#property strict
 
 
 //+------------------------------------------------------------------+
