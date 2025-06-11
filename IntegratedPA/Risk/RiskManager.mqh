@@ -2294,8 +2294,48 @@ double CRiskManager::GetPartialVolume(string symbol, ulong ticket, double curren
 }
 
 double CRiskManager::GetCurrentTotalRisk() {
-   // Implementação original mantida
-   return 0; // Placeholder
+   double totalRisk = 0.0;
+   int    totalPos  = PositionsTotal();
+
+   for(int i = 0; i < totalPos; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(!PositionSelectByTicket(ticket))
+         continue;
+
+      double volume    = PositionGetDouble(POSITION_VOLUME);
+      double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      double stopLoss  = PositionGetDouble(POSITION_SL);
+      string symbol    = PositionGetString(POSITION_SYMBOL);
+      ENUM_POSITION_TYPE type =
+         (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+
+      if(stopLoss <= 0.0)
+         continue; // risco indefinido sem SL
+
+      double pointValue = GetSymbolPointValue(symbol);
+      double riskPoints = 0.0;
+
+      if(type == POSITION_TYPE_BUY)
+         riskPoints = openPrice - stopLoss;
+      else
+         riskPoints = stopLoss - openPrice;
+
+      if(riskPoints <= 0.0 || volume <= 0.0)
+         continue;
+
+      totalRisk += riskPoints * volume * pointValue;
+   }
+
+   // Usar saldo atual para normalizar
+   double balance = m_accountBalance;
+   if(balance <= 0.0)
+      balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   if(balance <= 0.0)
+      return 0.0;
+
+   return (totalRisk / balance) * 100.0;
 }
 
 #endif // RISKMANAGER_MQH
