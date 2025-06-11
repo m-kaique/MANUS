@@ -36,3 +36,8 @@
 *.app
 
 # End of https://www.toptal.com/developers/gitignore/api/c++
+# MQL5 compiled files
+*.ex5
+
+# Archives
+*.zip
