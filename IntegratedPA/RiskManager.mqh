@@ -75,6 +75,7 @@ private:
    int FindSymbolIndex(string symbol);
    double CalculateATRValue(string symbol, ENUM_TIMEFRAMES timeframe, int period);
    bool ValidateMarketPrice(string symbol, double &price);
+   bool ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double price, double &stopLoss);
    
    // ✅ NOVOS MÉTODOS PARA PARCIAIS UNIVERSAIS - CORRIGIDOS PARA MQL5
    ASSET_TYPE ClassifyAssetType(string symbol);
@@ -1591,6 +1592,63 @@ bool CRiskManager::ValidateMarketPrice(string symbol, double &price) {
 }
 
 //+------------------------------------------------------------------+
+//| ✅ FUNÇÃO: ValidateStopLoss                                      |
+//| Verifica SL com regras de distância e normalização               |
+//+------------------------------------------------------------------+
+bool CRiskManager::ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double price, double &stopLoss) {
+   if(stopLoss <= 0) {
+      if(m_logger != NULL)
+         m_logger.Error("RiskManager: Stop loss inválido (<=0) para " + symbol);
+      return false;
+   }
+
+   int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   int stopsLevel = (int)SymbolInfoInteger(symbol, SYMBOL_TRADE_STOPS_LEVEL);
+
+   stopLoss = NormalizeDouble(stopLoss, digits);
+
+   double distance = MathAbs(price - stopLoss);
+
+   if(type == ORDER_TYPE_BUY && stopLoss >= price) {
+      if(m_logger != NULL)
+         m_logger.Error("RiskManager: Stop loss acima do preço de compra para " + symbol);
+      return false;
+   }
+   if(type == ORDER_TYPE_SELL && stopLoss <= price) {
+      if(m_logger != NULL)
+         m_logger.Error("RiskManager: Stop loss abaixo do preço de venda para " + symbol);
+      return false;
+   }
+
+   double minDist = stopsLevel * point;
+   if(stopsLevel > 0 && distance < minDist) {
+      if(m_logger != NULL)
+         m_logger.Error(StringFormat("RiskManager: Stop loss muito próximo para %s (%.5f < mínimo %.5f)",
+                                     symbol, distance, minDist));
+      return false;
+   }
+
+   double maxDist = price * 0.10;
+   if(distance > maxDist) {
+      if(m_logger != NULL)
+         m_logger.Error(StringFormat("RiskManager: Stop loss muito distante para %s (%.5f > %.5f)",
+                                     symbol, distance, maxDist));
+      return false;
+   }
+
+   MqlTick tick;
+   if(SymbolInfoTick(symbol, tick)) {
+      double spread = tick.ask - tick.bid;
+      if(spread > distance * 0.5 && m_logger != NULL)
+         m_logger.Warning(StringFormat("RiskManager: Spread %.5f grande em relação ao SL %.5f para %s",
+                                        spread, distance, symbol));
+   }
+
+   return true;
+}
+
+//+------------------------------------------------------------------+
 //| ✅ FUNÇÃO PRINCIPAL MODIFICADA: BuildRequest                   |
 //| Integra o sistema de parciais universal                         |
 //+------------------------------------------------------------------+
@@ -1671,13 +1729,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       }
    }
    
-   // Validar stop loss
-   if(request.stopLoss <= 0 || 
-      (signal.direction == ORDER_TYPE_BUY && request.stopLoss >= request.price) ||
-      (signal.direction == ORDER_TYPE_SELL && request.stopLoss <= request.price)) {
-      if(m_logger != NULL) {
-         m_logger.Error("RiskManager: Stop loss inválido do sinal para " + symbol);
-      }
+   // Validar stop loss com regras adicionais
+   if(!ValidateStopLoss(symbol, request.type, request.price, request.stopLoss)) {
       request.volume = 0;
       if(m_circuitBreaker != NULL)
          m_circuitBreaker.RegisterError();
