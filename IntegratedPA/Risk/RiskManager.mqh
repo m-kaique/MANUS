@@ -2070,8 +2070,10 @@ double CRiskManager::GetCurrentTotalRisk() {
    if(balance <= 0.0)
       return 0.0;
 
-   return (totalRisk / balance) * 100.0;
+  return (totalRisk / balance) * 100.0;
 }
 
+#include "PositionSizing.mqh"
+#include "RiskValidation.mqh"
 #endif // RISKMANAGER_MQH
 

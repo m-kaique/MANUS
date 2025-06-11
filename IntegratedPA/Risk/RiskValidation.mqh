@@ -89,4 +89,5 @@ bool CRiskManager::ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double 
    return true;
 }
 
+
 #endif // RISK_VALIDATION_MQH
