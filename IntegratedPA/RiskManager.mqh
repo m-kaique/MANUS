@@ -26,7 +26,7 @@
 //+------------------------------------------------------------------+
 struct SetupRiskMatrix
 {
-   ENUM_SETUP_QUALITY quality;   // Qualidade do setup
+   SETUP_QUALITY      quality;   // Qualidade do setup
    int                minFactors;// Fatores mínimos de confluência
    double             minRiskReward; // R:R mínimo
    double             maxScaling;    // Escalonamento máximo permitido
@@ -43,7 +43,7 @@ SetupRiskMatrix riskMatrix[] =
    };
 
 // Avaliar qualidade de setup com base em fatores e R:R
-ENUM_SETUP_QUALITY EvaluateSetupQuality(int factors, double riskReward)
+SETUP_QUALITY EvaluateSetupQuality(int factors, double riskReward)
 {
    for(int i=0;i<ArraySize(riskMatrix);i++)
    {
@@ -126,7 +126,7 @@ private:
                                                    double &originalPercentages[],
                                                    double &originalLevels[],
                                                    int numPartials,
-                                                   ENUM_SETUP_QUALITY quality);
+                                                   SETUP_QUALITY quality);
    PARTIAL_STRATEGY DetermineOptimalStrategy(string symbol, double volume, 
                                            LotCharacteristics &lotChar, 
                                            double &percentages[], int numPartials);
@@ -150,8 +150,8 @@ private:
    void LogPartialDecision(string symbol, AdaptivePartialConfig &config);
    void UpdatePartialMetrics(AdaptivePartialConfig &config);
    double GetScalingTier(SETUP_QUALITY quality, double requiredFactor, double maxFactor);
-   double CalculateRiskBasedScaling(ENUM_SETUP_QUALITY quality, double baseScaling);
-   bool   ValidateSetupForScaling(ENUM_SETUP_QUALITY quality, double requestedScaling);
+   double CalculateRiskBasedScaling(SETUP_QUALITY quality, double baseScaling);
+   bool   ValidateSetupForScaling(SETUP_QUALITY quality, double requestedScaling);
 
 public:
    // ✅ CONSTRUTORES E DESTRUTOR ORIGINAIS MANTIDOS
@@ -735,7 +735,7 @@ AdaptivePartialConfig CRiskManager::CalculateUniversalPartials(string symbol, do
                                                               double &originalPercentages[],
                                                               double &originalLevels[],
                                                               int numPartials,
-                                                              ENUM_SETUP_QUALITY quality)
+                                                              SETUP_QUALITY quality)
 {
    AdaptivePartialConfig config;
    
@@ -1600,7 +1600,7 @@ double CRiskManager::GetScalingTier(SETUP_QUALITY quality, double requiredFactor
 //| ✅ FUNÇÃO AUXILIAR: CalculateRiskBasedScaling                   |
 //| Limita o escalonamento baseado na qualidade do setup            |
 //+------------------------------------------------------------------+
-double CRiskManager::CalculateRiskBasedScaling(ENUM_SETUP_QUALITY quality, double baseScaling)
+double CRiskManager::CalculateRiskBasedScaling(SETUP_QUALITY quality, double baseScaling)
 {
    for(int i=0;i<ArraySize(riskMatrix);i++)
    {
@@ -1614,7 +1614,7 @@ double CRiskManager::CalculateRiskBasedScaling(ENUM_SETUP_QUALITY quality, doubl
 //| ✅ FUNÇÃO AUXILIAR: ValidateSetupForScaling                     |
 //| Impede escalonamento inadequado para setups fracos              |
 //+------------------------------------------------------------------+
-bool CRiskManager::ValidateSetupForScaling(ENUM_SETUP_QUALITY quality, double requestedScaling)
+bool CRiskManager::ValidateSetupForScaling(SETUP_QUALITY quality, double requestedScaling)
 {
    if(quality==SETUP_C && requestedScaling>1.0)
    {
