@@ -16,6 +16,9 @@
 #include "Constants.mqh"
 #include "MarketContext.mqh"
 #include "CircuitBreaker.mqh"
+#include "Execution/OrderExecution.mqh"
+#include "Execution/TrailingStopManager.mqh"
+#include "Execution/BreakevenManager.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0
@@ -42,6 +45,9 @@ private:
    CMarketContext *m_marketcontext;
    CJSONLogger *m_jsonlog;
    CCircuitBreaker *m_circuitBreaker;
+   COrderExecution m_orderExecution;
+   CTrailingStopManager m_trailingManager;
+   CBreakevenManager m_breakevenManager;
 
 
    // Configurações
@@ -185,7 +191,7 @@ public:
 
    double CalculatePartialVolume(string symbol, ulong ticket, double currentVolume);
 
-   void ManageTrailingStops();
+   void m_trailingManager.Manage();
 
    // Métodos de configuração
    void SetTradeAllowed(bool allowed) { m_tradeAllowed = allowed; }
@@ -237,272 +243,29 @@ bool CTradeExecutor::Initialize(CLogger *logger, CMarketContext *marketContext, 
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *  marketcontext, CCircuitBreaker *circuitBreaker)
+bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext, CCircuitBreaker *circuitBreaker)
 {
-   // Verificar parâmetros
-   if (logger == NULL)
-   {
-      Print("CTradeExecutor::Initialize - Logger não pode ser NULL");
-      return false;
-   }
-
-   // Atribuir logger
-   m_logger = logger;
-   m_circuitBreaker = circuitBreaker;
-   m_logger.Info("Inicializando TradeExecutor");
-
-   // Atribuir MarketContext
-   m_marketcontext = marketcontext;
-
-   // Atribuit jsonlogger
-   m_jsonlog = jsonlog;
-   // Criar objeto de trade
-   m_trade = new CTrade();
-   if (m_trade == NULL)
-   {
-      m_logger.Error("Falha ao criar objeto CTrade");
-      return false;
-   }
-
-   // Configurar objeto de trade
-   m_trade.SetExpertMagicNumber(MAGIC_NUMBER); // Magic number para identificar ordens deste EA
-   m_trade.SetMarginMode();
-   m_trade.SetTypeFillingBySymbol(Symbol());
-   m_trade.SetDeviationInPoints(10); // Desvio máximo de preço em pontos
-
-   m_logger.Info("TradeExecutor inicializado com sucesso");
-   return true;
+   m_logger=logger;
+   m_marketcontext=marketcontext;
+   m_jsonlog=jsonlog;
+   m_circuitBreaker=circuitBreaker;
+   bool ok=m_orderExecution.Initialize(logger,jsonlog,marketcontext,circuitBreaker);
+   m_trailingManager.Initialize(logger,m_orderExecution.GetTrade());
+   m_breakevenManager.Initialize(logger,m_orderExecution.GetTrade());
+   return ok;
 }
+
 
 bool CTradeExecutor::Execute(OrderRequest &request)
 {
-   // Verificar se trading está permitido
-   if (!m_tradeAllowed)
-   {
-      m_lastError = -1;
-      m_lastErrorDesc = "Trading não está habilitado";
-      m_logger.Warning(m_lastErrorDesc);
-      return false;
-   }
-
-   if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate())
-   {
-      m_lastError = -5;
-      m_lastErrorDesc = "Circuit Breaker ativo";
-      if(m_logger != NULL)
-         m_logger.Warning("Execução bloqueada pelo Circuit Breaker");
-      return false;
-   }
-
-   // Verificar parâmetros
-   if (request.symbol == "" || request.volume <= 0)
-   {
-      m_lastError = -2;
-      m_lastErrorDesc = "Parâmetros de ordem inválidos";
-      m_logger.Error(m_lastErrorDesc);
-      return false;
-   }
-
-   // ✅ NOVA VALIDAÇÃO: Ajustar stops ANTES da execução
-   double adjustedEntry = request.price;
-   double adjustedSL = request.stopLoss;
-   double adjustedTP = request.takeProfit;
-
-   if (!ValidateAndAdjustStops(request.symbol, request.type, adjustedEntry, adjustedSL, adjustedTP))
-   {
-      m_lastError = -4;
-      m_lastErrorDesc = "Falha na validação dos stops";
-      m_logger.Error(m_lastErrorDesc);
-      return false;
-   }
-
-   // Atualizar valores no request
-   request.price = adjustedEntry;
-   request.stopLoss = adjustedSL;
-   request.takeProfit = adjustedTP;
-
-   // Registrar detalhes da ordem
-   m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
-                              request.symbol,
-                              request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
-                              request.volume,
-                              request.price,
-                              request.stopLoss,
-                              request.takeProfit));
-
-   // Executar ordem com retry
-   bool result = false;
-   int retries = 0;
-
-   while (retries < m_maxRetries && !result)
-   {
-      if (retries > 0)
-      {
-         m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-         Sleep(m_retryDelay);
-
-         // ✅ Re-validar stops a cada tentativa (preços podem ter mudado)
-         if (!ValidateAndAdjustStops(request.symbol, request.type, request.price, request.stopLoss, request.takeProfit))
-         {
-            m_logger.Error("Falha na re-validação dos stops");
-            return false;
-         }
-      }
-
-      // ✅ Para ordens de mercado, usar preço 0 (execução ao melhor preço disponível)
-      double executionPrice = request.price;
-      if (request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL)
-      {
-         executionPrice = 0; // Deixar o MT5 usar o preço de mercado atual
-      }
-
-      // Executar ordem de acordo com o tipo
-      switch (request.type)
-      {
-      case ORDER_TYPE_BUY:
-         result = m_trade.Buy(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
-         break;
-      case ORDER_TYPE_SELL:
-         result = m_trade.Sell(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
-         break;
-      case ORDER_TYPE_BUY_LIMIT:
-         result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      case ORDER_TYPE_SELL_LIMIT:
-         result = m_trade.SellLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      case ORDER_TYPE_BUY_STOP:
-         result = m_trade.BuyStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      case ORDER_TYPE_SELL_STOP:
-         result = m_trade.SellStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      default:
-         m_lastError = -3;
-         m_lastErrorDesc = "Tipo de ordem não suportado";
-         m_logger.Error(m_lastErrorDesc);
-         return false;
-      }
-
-      // Verificar resultado
-      if (!result)
-      {
-         m_lastError = (int)m_trade.ResultRetcode();
-         m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
-
-         // ✅ Log detalhado do erro
-         if (m_logger != NULL)
-         {
-            m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s",
-                                        m_lastErrorDesc,
-                                        m_lastError,
-                                        m_trade.ResultRetcodeDescription()));
-         }
-
-         // Verificar se o erro é recuperável
-         if (!IsRetryableError(m_lastError))
-         {
-            m_logger.Error(m_lastErrorDesc);
-            return false;
-         }
-      }
-
-      retries++;
-   }
-
-   // Verificar resultado final
-   if (result)
-   {
-      ulong ticket = m_trade.ResultOrder();
-      m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", ticket));
-
-   // ✅ CORREÇÃO CRÍTICA: Configurar APENAS breakeven inicialmente
-   // Trailing será configurado automaticamente após breakeven ser acionado
-   if (ticket > 0)
-   {
-      AutoConfigureBreakeven(ticket, request.symbol);
-
-      // ✅ NOVO: Configurar controle inteligente de parciais
-      ConfigurePartialControl(ticket, request.symbol, request.price, request.volume);
-
-      if (m_logger != NULL)
-      {
-         m_logger.Info(StringFormat("Breakeven e controle de parciais configurados para #%d. Trailing será ativado após breakeven.", ticket));
-      }
-   }
-      if(m_circuitBreaker != NULL)
-         m_circuitBreaker.RegisterSuccess();
-      return true;
-   }
-   else
-   {
-      if(m_circuitBreaker != NULL)
-         m_circuitBreaker.RegisterError();
-      m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
-      return false;
-   }
+   return m_orderExecution.Execute(request);
 }
 
-//+------------------------------------------------------------------+
-//| Modificação de posição                                           |
-//+------------------------------------------------------------------+
 bool CTradeExecutor::ModifyPosition(ulong ticket, double stopLoss, double takeProfit)
 {
-   // Verificar se trading está permitido
-   if (!m_tradeAllowed)
-   {
-      m_lastError = -1;
-      m_lastErrorDesc = "Trading não está habilitado";
-      m_logger.Warning(m_lastErrorDesc);
-      return false;
-   }
-
-   // Registrar detalhes da modificação
-   m_logger.Info(StringFormat("Modificando posição #%d: SL: %.5f, TP: %.5f", ticket, stopLoss, takeProfit));
-
-   // Executar modificação com retry
-   bool result = false;
-   int retries = 0;
-
-   while (retries < m_maxRetries && !result)
-   {
-      if (retries > 0)
-      {
-         m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-         Sleep(m_retryDelay);
-      }
-
-      result = m_trade.PositionModify(ticket, stopLoss, takeProfit);
-
-      // Verificar resultado
-      if (!result)
-      {
-         m_lastError = (int)m_trade.ResultRetcode();
-         m_lastErrorDesc = "Erro na modificação da posição: " + IntegerToString(m_lastError);
-
-         // Verificar se o erro é recuperável
-         if (!IsRetryableError(m_lastError))
-         {
-            m_logger.Error(m_lastErrorDesc);
-            return false;
-         }
-      }
-
-      retries++;
-   }
-
-   // Verificar resultado final
-   if (result)
-   {
-      m_logger.Info(StringFormat("Posição #%d modificada com sucesso", ticket));
-      return true;
-   }
-   else
-   {
-      m_logger.Error(StringFormat("Falha na modificação da posição #%d após %d tentativas. Último erro: %d", ticket, m_maxRetries, m_lastError));
-      return false;
-   }
+   return m_orderExecution.ModifyPosition(ticket, stopLoss, takeProfit);
 }
+
 
 //+------------------------------------------------------------------+
 //| Fechamento de posição                                            |
@@ -513,74 +276,9 @@ bool CTradeExecutor::ModifyPosition(ulong ticket, double stopLoss, double takePr
 //+------------------------------------------------------------------+
 bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
 {
-   // Validar e selecionar posição
-   if(!PositionSelectByTicket(ticket))
-   {
-      m_lastError = ERR_TRADE_POSITION_NOT_FOUND;
-      m_lastErrorDesc = "Posição não encontrada: " + IntegerToString(ticket);
-      m_logger.Error(m_lastErrorDesc);
-      return false;
-   }
-   
-   // Obter volume atual da posição
-   double currentVolume = PositionGetDouble(POSITION_VOLUME);
-   
-   // Determinar tipo de fechamento
-   bool isFullClose = (volume <= 0 || volume >= currentVolume);
-   
-   if(isFullClose)
-   {
-      // ✅ FECHAMENTO TOTAL USANDO CTrade
-      m_logger.Info(StringFormat("Fechando posição #%d completamente (%.2f lotes)", ticket, currentVolume));
-      
-      bool result = false;
-      int retries = 0;
-      
-      while(retries < m_maxRetries && !result)
-      {
-         if(retries > 0)
-         {
-            m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
-            Sleep(m_retryDelay);
-         }
-         
-         result = m_trade.PositionClose(ticket);
-         
-         if(!result)
-         {
-            m_lastError = (int)m_trade.ResultRetcode();
-            m_lastErrorDesc = "Erro no fechamento da posição: " + IntegerToString(m_lastError);
-            
-            if(!IsRetryableError(m_lastError))
-            {
-               m_logger.Error(StringFormat("Erro não recuperável: %d", m_lastError));
-               break;
-            }
-         }
-         
-         retries++;
-      }
-      
-      if(result)
-      {
-         m_logger.Info(StringFormat("✅ POSIÇÃO #%d FECHADA COMPLETAMENTE", ticket));
-      }
-      else
-      {
-         m_logger.Error(StringFormat("❌ FALHA NO FECHAMENTO da posição #%d: %s", ticket, m_lastErrorDesc));
-      }
-      
-      return result;
-   }
-   else
-   {
-      // ✅ FECHAMENTO PARCIAL USANDO OrderSend OFICIAL
-      m_logger.Info(StringFormat("Fechando posição #%d parcialmente: %.2f de %.2f lotes", 
-                                ticket, volume, currentVolume));
-      
-      return ClosePartialPosition(ticket, volume);
-   }
+   return m_orderExecution.ClosePosition(ticket, volume);
 }
+
 //+------------------------------------------------------------------+
 //| Fechamento de todas as posições                                  |
 //+------------------------------------------------------------------+
@@ -614,52 +312,9 @@ bool CTradeExecutor::CloseAllPositions(string symbol = "")
    {
       ulong ticket = PositionGetTicket(i);
 
-      if (ticket <= 0)
-      {
-         m_logger.Warning(StringFormat("Falha ao obter ticket da posição %d", i));
-         continue;
-      }
-
-      // Verificar símbolo se especificado
-      if (symbol != "")
-      {
-         if (!PositionSelectByTicket(ticket))
-         {
-            m_logger.Warning(StringFormat("Falha ao selecionar posição #%d", ticket));
-            continue;
-         }
-
-         string posSymbol = PositionGetString(POSITION_SYMBOL);
-         if (posSymbol != symbol)
-         {
-            continue; // Pular posições de outros símbolos
-         }
-      }
-
-      // Fechar posição
-      if (ClosePosition(ticket))
-      {
-         closedPositions++;
-      }
-   }
-
-   // Verificar resultado
-   if (closedPositions > 0)
-   {
-      m_logger.Info(StringFormat("%d posições fechadas com sucesso", closedPositions));
-      return true;
-   }
-   else if (totalPositions == 0)
-   {
-      m_logger.Info("Nenhuma posição aberta para fechar");
-      return true;
-   }
-   else
-   {
-      m_logger.Warning(StringFormat("Nenhuma posição fechada de %d posições abertas", totalPositions));
-      return false;
-   }
+   return m_orderExecution.CloseAllPositions(symbol);
 }
+
 
 //+------------------------------------------------------------------+
 //| Aplicar trailing stop fixo                                       |
@@ -3102,10 +2757,10 @@ void CTradeExecutor::ManageOpenPositions()
 
    // ✅ CORREÇÃO CRÍTICA: SEQUÊNCIA CORRETA DE GERENCIAMENTO
    // 1. PRIMEIRO: Gerenciar breakevens (prioridade máxima)
-   ManageBreakevens();
+   m_breakevenManager.Manage();
    
    // 2. SEGUNDO: Gerenciar trailing stops (após breakeven)
-   ManageTrailingStops();
+   m_trailingManager.Manage();
    
    // 3. TERCEIRO: Gerenciar parciais
    ManagePartialTakeProfits();
