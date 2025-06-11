@@ -17,8 +17,13 @@ private:
    int m_lock;
 public:
    CSimpleLock() { m_lock = 0; }
-   void Lock()   { while(AtomicCompareExchange(m_lock,1,0)!=0) Sleep(0); }
-   void Unlock() { AtomicExchange(m_lock,0); }
+   void Lock()
+   {
+      while(m_lock != 0)
+         Sleep(0);
+      m_lock = 1;
+   }
+   void Unlock() { m_lock = 0; }
 };
 
 //+------------------------------------------------------------------+
