@@ -23,6 +23,7 @@
 #include "CircuitBreaker.mqh"
 #include "VolatilityAdjuster.mqh"
 #include "DrawdownController.mqh"
+#include "MetricsCollector.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -105,6 +106,7 @@ private:
    
    // ✅ MÉTRICAS DE PERFORMANCE PARA PARCIAIS UNIVERSAIS
    PartialMetrics m_partialMetrics;
+   CMetricsCollector *m_metricsCollector;
 
    // ✅ NOVA ESTRUTURA: Tiers de escalonamento por qualidade de setup
    struct QualityScalingTiers {
@@ -273,6 +275,8 @@ CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRi
    m_accountBalance = 0;
    m_accountEquity = 0;
    m_accountFreeMargin = 0;
+
+   m_metricsCollector = new CMetricsCollector();
    
    // ✅ INICIALIZAR MÉTRICAS DE PARCIAIS
    m_partialMetrics.lastReset = TimeCurrent();
@@ -301,7 +305,11 @@ CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRi
 //| Destrutor                                                        |
 //+------------------------------------------------------------------+
 CRiskManager::~CRiskManager() {
-   // Nada a liberar, apenas objetos referenciados
+   if(m_metricsCollector != NULL)
+   {
+      delete m_metricsCollector;
+      m_metricsCollector = NULL;
+   }
 }
 
 //+------------------------------------------------------------------+
@@ -981,6 +989,8 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
       if(m_logger != NULL)
          m_logger.Warning(StringFormat("⚠️ Volume %.2f para %s considerado outlier. Reduzindo.",
                                       finalCandidate, symbol));
+      if(m_metricsCollector != NULL)
+         m_metricsCollector.RecordOutlierPrevention(finalCandidate, config.originalVolume);
       finalCandidate = config.originalVolume;
    }
 
@@ -994,10 +1004,15 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
       if(m_logger != NULL)
          m_logger.Warning(StringFormat("⚠️ Volume %.2f para %s excede 10%% da equity. Limitado a %.2f",
                                       finalCandidate, symbol, equityLimit));
-      finalCandidate = MathMin(finalCandidate, equityLimit);
+      double limited = MathMin(finalCandidate, equityLimit);
+      if(m_metricsCollector != NULL && limited < finalCandidate)
+         m_metricsCollector.RecordVolumeAdjustment(finalCandidate, limited, "Equity Limit");
+      finalCandidate = limited;
    }
 
    config.finalVolume = finalCandidate;
+   if(m_metricsCollector != NULL && config.finalVolume < config.originalVolume)
+      m_metricsCollector.RecordVolumeAdjustment(config.originalVolume, config.finalVolume, "Scaled Limit");
    config.volumeWasScaled = (config.finalVolume > config.originalVolume);
    
    // ✅ PROTEÇÃO: Evitar divisão por zero
@@ -1910,11 +1925,16 @@ bool CRiskManager::ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double 
 OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PHASE phase) {
    OrderRequest request;
 
+   if(m_metricsCollector != NULL && TimeCurrent() - m_metricsCollector.GetLastReportTime() >= 86400)
+      m_metricsCollector.GenerateReport();
+
    if(m_circuitBreaker != NULL && !m_circuitBreaker.CanOperate()) {
       if(m_logger != NULL)
          m_logger.Warning("BuildRequest bloqueado pelo Circuit Breaker");
       request.volume = 0;
       m_circuitBreaker.RegisterError();
+      if(m_metricsCollector != NULL)
+         m_metricsCollector.RecordCircuitBreakerActivation();
       return request;
    }
    
@@ -2022,6 +2042,8 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
 
    double ddAdjustment = ddController.GetVolumeAdjustment();
    baseVolume         *= ddAdjustment;
+   if(m_metricsCollector != NULL && ddAdjustment < 1.0)
+      m_metricsCollector.RecordDrawdownIntervention(ddController.GetCurrentDrawdown(), ddAdjustment);
 
    if(m_logger != NULL)
    {
@@ -2040,7 +2062,10 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       double volatilityFactor = volatilityAdjuster.CalculateVolatilityAdjustment(symbol);
       double currentATR       = volatilityAdjuster.GetCurrentATR(symbol);
       double baseline         = volatilityAdjuster.GetBaselineVolatility(symbol);
+      double beforeVol        = baseVolume;
       baseVolume             *= volatilityFactor;
+      if(m_metricsCollector != NULL && volatilityFactor != 1.0)
+         m_metricsCollector.RecordVolumeAdjustment(beforeVol, baseVolume, "Volatility");
 
       if(m_logger != NULL)
       {
@@ -2176,7 +2201,10 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    
    // Ajustar para lotes válidos
    request.volume = AdjustLotSize(symbol, request.volume);
-   
+
+   if(m_metricsCollector != NULL)
+      m_metricsCollector.RecordScaling(signal.quality, request.volume);
+
    // Validação final
    if(request.volume <= 0) {
       if(m_logger != NULL) {

@@ -181,6 +181,54 @@ struct PartialMetrics
 };
 
 //+------------------------------------------------------------------+
+//| Estrutura para Métricas de Correção                             |
+//+------------------------------------------------------------------+
+struct CorrectionMetrics
+{
+   // Scaling metrics
+   int      totalScalings;
+   int      scalingsA_Plus;
+   int      scalingsA;
+   int      scalingsB;
+   int      scalingsC;
+
+   // Volume metrics
+   double   avgVolumeBeforeCorrection;
+   double   avgVolumeAfterCorrection;
+   double   maxVolumeRecorded;
+   int      outliersPrevented;
+
+   // Control metrics
+   int      drawdownInterventions;
+   int      volatilityAdjustments;
+   int      circuitBreakerActivations;
+
+   // Timing
+   datetime metricsStartTime;
+   datetime lastReset;
+   datetime lastReport;
+
+   CorrectionMetrics()
+   {
+      totalScalings              = 0;
+      scalingsA_Plus             = 0;
+      scalingsA                  = 0;
+      scalingsB                  = 0;
+      scalingsC                  = 0;
+      avgVolumeBeforeCorrection  = 0.0;
+      avgVolumeAfterCorrection   = 0.0;
+      maxVolumeRecorded          = 0.0;
+      outliersPrevented          = 0;
+      drawdownInterventions      = 0;
+      volatilityAdjustments      = 0;
+      circuitBreakerActivations  = 0;
+      metricsStartTime           = TimeCurrent();
+      lastReset                  = TimeCurrent();
+      lastReport                 = 0;
+   }
+};
+
+//+------------------------------------------------------------------+
 //| ✅ ESTRUTURAS ORIGINAIS MANTIDAS                                |
 //+------------------------------------------------------------------+
 
