@@ -22,6 +22,7 @@
 #include "Constants.mqh"
 #include "CircuitBreaker.mqh"
 #include "VolatilityAdjuster.mqh"
+#include "DrawdownController.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -2003,6 +2004,33 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_circuitBreaker.RegisterError();
       return request;
   }
+
+   // Controle automático de drawdown
+   CDrawdownController *ddController = new CDrawdownController();
+   ddController.UpdateDrawdownStatus();
+
+   if(!ddController.IsTradingAllowed())
+   {
+      if(m_logger != NULL)
+         m_logger.Warning("Trading paused due to excessive drawdown");
+      request.volume = 0;
+      if(m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError();
+      delete ddController;
+      return request;
+   }
+
+   double ddAdjustment = ddController.GetVolumeAdjustment();
+   baseVolume         *= ddAdjustment;
+
+   if(m_logger != NULL)
+   {
+      m_logger.Info(StringFormat("Drawdown Control: Level=%s, DD=%.2f%%, Volume Adj=%.2f",
+                                EnumToString(ddController.GetCurrentLevel()),
+                                ddController.GetCurrentDrawdown(),
+                                ddAdjustment));
+   }
+   delete ddController;
 
    // Adjust position size based on market volatility
    if(m_handlePool != NULL)
