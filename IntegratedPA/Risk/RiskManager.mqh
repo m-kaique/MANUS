@@ -25,6 +25,8 @@
 #include "DrawdownController.mqh"
 #include "../Core/MetricsCollector.mqh"
 #include "PartialManager.mqh"
+#include "PositionSizing.mqh"
+#include "RiskValidation.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -2070,8 +2072,6 @@ double CRiskManager::GetCurrentTotalRisk() {
 
    return (totalRisk / balance) * 100.0;
 }
-#include "PositionSizing.mqh"
-#include "RiskValidation.mqh"
 
 #endif // RISKMANAGER_MQH
 
