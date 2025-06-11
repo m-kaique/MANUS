@@ -28,6 +28,7 @@
 #include "SetupClassifier.mqh"
 #include "JsonLog.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
+#include "CircuitBreaker.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -57,6 +58,7 @@ input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualid
 //+------------------------------------------------------------------+
 // Objetos globais
 CLogger *g_logger = NULL;
+CCircuitBreaker *g_circuitBreaker = NULL;
 CHandlePool *g_handlePool = NULL;                               // ← NOVO: Pool global de handles
 CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
@@ -64,6 +66,7 @@ CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
 CJSONLogger *g_jsonLogger = NULL;
+
 
 // Array de ativos configurados
 AssetConfig g_assets[];
@@ -382,12 +385,20 @@ bool ConfigureRiskParameters()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+
+
+
    // Inicializar o logger primeiro para registrar todo o processo
    g_logger = new CLogger();
    if (g_logger == NULL)
    {
       Print("Erro ao criar objeto Logger");
       return (INIT_FAILED);
+   }
+
+   g_circuitBreaker = new CCircuitBreaker(g_logger, 3, 30);
+   if(g_circuitBreaker == NULL){
+      Print("Erro ao criar objeto Circuit Breaker");
    }
 
    // Inicializar o logger JSON após o logger principal
@@ -492,7 +503,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_riskManager.Initialize(g_logger, g_marketContext))
+   if (!g_riskManager.Initialize(g_logger, g_marketContext, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar RiskManager");
       return (INIT_FAILED);
@@ -512,7 +523,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext))
+   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
       return (INIT_FAILED);

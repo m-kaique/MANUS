@@ -216,6 +216,12 @@ input group "=== TRAILING STOP MELHORADO ==="
 input int    TRAILING_MIN_PROFIT_POINTS = 50;         // Mínimo lucro antes de ativar trailing
 input double TRAILING_ACTIVATION_RR = 0.3;            // Ativar trailing após 0.3:1 R:R
 
+
+//+------------------------------------------------------------------+
+//| Limites e Volumes                                                |
+//+------------------------------------------------------------------+
+input group "=== LIMITE DE VOLUME P/ ORDEM ==="
+input double MAX_VOLUME_PER_TRADE = 8.0; 
 //+------------------------------------------------------------------+
 //| CONSTANTES NÃO CONFIGURÁVEIS                                     |
 //+------------------------------------------------------------------+

@@ -13,6 +13,7 @@
 #include "Structures.mqh"
 #include "Logger.mqh"
 #include "JsonLog.mqh"
+#include "CircuitBreaker.mqh"
 #include "Constants.mqh"
 #include "MarketContext.mqh"
 
@@ -40,7 +41,7 @@ private:
    CLogger *m_logger;
    CMarketContext *m_marketcontext;
    CJSONLogger *m_jsonlog;
-
+   CCircuitBreaker *m_circuitBreaker;
 
    // Configurações
    bool m_tradeAllowed;
@@ -79,17 +80,17 @@ private:
    // ✅ ESTRUTURA APRIMORADA: Controle inteligente de parciais com timing automático
    struct PartialControlConfig
    {
-      ulong ticket;                    // Ticket da posição
-      string symbol;                   // Símbolo
-      ENUM_TIMEFRAMES timeframe;       // Timeframe para cálculo automático de timing
-      datetime lastPartialTime;        // Timestamp da última parcial
-      double lastPartialPrice;         // Preço da última parcial
-      int partialsExecuted;           // Número de parciais já executadas
-      double nextPartialRR;           // Próximo R:R necessário para parcial
-      bool isActive;                  // Se controle está ativo
-      double entryPrice;              // Preço de entrada (para cálculos)
-      double initialVolume;           // Volume inicial da posição
-      datetime entryTime;             // Timestamp de entrada (para análises)
+      ulong ticket;              // Ticket da posição
+      string symbol;             // Símbolo
+      ENUM_TIMEFRAMES timeframe; // Timeframe para cálculo automático de timing
+      datetime lastPartialTime;  // Timestamp da última parcial
+      double lastPartialPrice;   // Preço da última parcial
+      int partialsExecuted;      // Número de parciais já executadas
+      double nextPartialRR;      // Próximo R:R necessário para parcial
+      bool isActive;             // Se controle está ativo
+      double entryPrice;         // Preço de entrada (para cálculos)
+      double initialVolume;      // Volume inicial da posição
+      datetime entryTime;        // Timestamp de entrada (para análises)
    };
 
    // Array de configurações de controle de parciais
@@ -163,7 +164,7 @@ public:
    // Métodos de inicialização
    bool Initialize(CLogger *logger, CMarketContext *marketContext);
 
-   bool Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext);
+   bool Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext, CCircuitBreaker *circuitBreaker);
 
    // Métodos de execução
    bool Execute(OrderRequest &request);
@@ -229,7 +230,7 @@ CTradeExecutor::~CTradeExecutor()
 //+------------------------------------------------------------------+
 //| Inicialização                                                    |
 //+------------------------------------------------------------------+
-bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *  marketcontext)
+bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketContext *marketcontext, CCircuitBreaker *circuitBreaker)
 {
    // Verificar parâmetros
    if (logger == NULL)
@@ -244,6 +245,7 @@ bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketCo
 
    // Atribuir MarketContext
    m_marketcontext = marketcontext;
+   m_circuitBreaker = circuitBreaker;
 
    // Atribuit jsonlogger
    m_jsonlog = jsonlog;
@@ -267,12 +269,21 @@ bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketCo
 
 bool CTradeExecutor::Execute(OrderRequest &request)
 {
+   // Circuit Breaker
+   if (m_circuitBreaker != NULL && !m_circuitBreaker.IsOperationAllowed("Execute"))
+   {
+      m_logger.Warning("Execução bloqueada pelo Circuit Breaker");
+      return false;
+   }
+
    // Verificar se trading está permitido
    if (!m_tradeAllowed)
    {
       m_lastError = -1;
       m_lastErrorDesc = "Trading não está habilitado";
       m_logger.Warning(m_lastErrorDesc);
+      if (m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError("Trading desabilitado");
       return false;
    }
 
@@ -282,6 +293,8 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       m_lastError = -2;
       m_lastErrorDesc = "Parâmetros de ordem inválidos";
       m_logger.Error(m_lastErrorDesc);
+      if (m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError("Parâmetros inválidos");
       return false;
    }
 
@@ -295,6 +308,8 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       m_lastError = -4;
       m_lastErrorDesc = "Falha na validação dos stops";
       m_logger.Error(m_lastErrorDesc);
+      if (m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError("Validação de stops falhou");
       return false;
    }
 
@@ -303,7 +318,6 @@ bool CTradeExecutor::Execute(OrderRequest &request)
    request.stopLoss = adjustedSL;
    request.takeProfit = adjustedTP;
 
-   // Registrar detalhes da ordem
    m_logger.Info(StringFormat("Executando ordem: %s %s %.2f @ %.5f, SL: %.5f, TP: %.5f",
                               request.symbol,
                               request.type == ORDER_TYPE_BUY ? "BUY" : "SELL",
@@ -323,22 +337,19 @@ bool CTradeExecutor::Execute(OrderRequest &request)
          m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
          Sleep(m_retryDelay);
 
-         // ✅ Re-validar stops a cada tentativa (preços podem ter mudado)
          if (!ValidateAndAdjustStops(request.symbol, request.type, request.price, request.stopLoss, request.takeProfit))
          {
             m_logger.Error("Falha na re-validação dos stops");
+            if (m_circuitBreaker != NULL)
+               m_circuitBreaker.RegisterError("Revalidação de stops falhou");
             return false;
          }
       }
 
-      // ✅ Para ordens de mercado, usar preço 0 (execução ao melhor preço disponível)
       double executionPrice = request.price;
       if (request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL)
-      {
-         executionPrice = 0; // Deixar o MT5 usar o preço de mercado atual
-      }
+         executionPrice = 0;
 
-      // Executar ordem de acordo com o tipo
       switch (request.type)
       {
       case ORDER_TYPE_BUY:
@@ -363,28 +374,25 @@ bool CTradeExecutor::Execute(OrderRequest &request)
          m_lastError = -3;
          m_lastErrorDesc = "Tipo de ordem não suportado";
          m_logger.Error(m_lastErrorDesc);
+         if (m_circuitBreaker != NULL)
+            m_circuitBreaker.RegisterError("Tipo de ordem não suportado");
          return false;
       }
 
-      // Verificar resultado
       if (!result)
       {
          m_lastError = (int)m_trade.ResultRetcode();
          m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
 
-         // ✅ Log detalhado do erro
-         if (m_logger != NULL)
-         {
-            m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s",
-                                        m_lastErrorDesc,
-                                        m_lastError,
-                                        m_trade.ResultRetcodeDescription()));
-         }
+         m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s",
+                                     m_lastErrorDesc,
+                                     m_lastError,
+                                     m_trade.ResultRetcodeDescription()));
 
-         // Verificar se o erro é recuperável
          if (!IsRetryableError(m_lastError))
          {
-            m_logger.Error(m_lastErrorDesc);
+            if (m_circuitBreaker != NULL)
+               m_circuitBreaker.RegisterError("Erro não recuperável: " + m_lastErrorDesc);
             return false;
          }
       }
@@ -392,32 +400,29 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       retries++;
    }
 
-   // Verificar resultado final
    if (result)
    {
       ulong ticket = m_trade.ResultOrder();
       m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", ticket));
 
-   // ✅ CORREÇÃO CRÍTICA: Configurar APENAS breakeven inicialmente
-   // Trailing será configurado automaticamente após breakeven ser acionado
-   if (ticket > 0)
-   {
-      AutoConfigureBreakeven(ticket, request.symbol);
-      
-      // ✅ NOVO: Configurar controle inteligente de parciais
-      ConfigurePartialControl(ticket, request.symbol, request.price, request.volume);
-      
-      if (m_logger != NULL)
+      if (ticket > 0)
       {
+         AutoConfigureBreakeven(ticket, request.symbol);
+         ConfigurePartialControl(ticket, request.symbol, request.price, request.volume);
+
          m_logger.Info(StringFormat("Breakeven e controle de parciais configurados para #%d. Trailing será ativado após breakeven.", ticket));
       }
-   }
+
+      if (m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterSuccess();
 
       return true;
    }
    else
    {
       m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
+      if (m_circuitBreaker != NULL)
+         m_circuitBreaker.RegisterError("Falha definitiva após retries: " + IntegerToString(m_lastError));
       return false;
    }
 }
@@ -493,54 +498,54 @@ bool CTradeExecutor::ModifyPosition(ulong ticket, double stopLoss, double takePr
 bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
 {
    // Validar e selecionar posição
-   if(!PositionSelectByTicket(ticket))
+   if (!PositionSelectByTicket(ticket))
    {
       m_lastError = ERR_TRADE_POSITION_NOT_FOUND;
       m_lastErrorDesc = "Posição não encontrada: " + IntegerToString(ticket);
       m_logger.Error(m_lastErrorDesc);
       return false;
    }
-   
+
    // Obter volume atual da posição
    double currentVolume = PositionGetDouble(POSITION_VOLUME);
-   
+
    // Determinar tipo de fechamento
    bool isFullClose = (volume <= 0 || volume >= currentVolume);
-   
-   if(isFullClose)
+
+   if (isFullClose)
    {
       // ✅ FECHAMENTO TOTAL USANDO CTrade
       m_logger.Info(StringFormat("Fechando posição #%d completamente (%.2f lotes)", ticket, currentVolume));
-      
+
       bool result = false;
       int retries = 0;
-      
-      while(retries < m_maxRetries && !result)
+
+      while (retries < m_maxRetries && !result)
       {
-         if(retries > 0)
+         if (retries > 0)
          {
             m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
             Sleep(m_retryDelay);
          }
-         
+
          result = m_trade.PositionClose(ticket);
-         
-         if(!result)
+
+         if (!result)
          {
             m_lastError = (int)m_trade.ResultRetcode();
             m_lastErrorDesc = "Erro no fechamento da posição: " + IntegerToString(m_lastError);
-            
-            if(!IsRetryableError(m_lastError))
+
+            if (!IsRetryableError(m_lastError))
             {
                m_logger.Error(StringFormat("Erro não recuperável: %d", m_lastError));
                break;
             }
          }
-         
+
          retries++;
       }
-      
-      if(result)
+
+      if (result)
       {
          m_logger.Info(StringFormat("✅ POSIÇÃO #%d FECHADA COMPLETAMENTE", ticket));
       }
@@ -548,15 +553,15 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
       {
          m_logger.Error(StringFormat("❌ FALHA NO FECHAMENTO da posição #%d: %s", ticket, m_lastErrorDesc));
       }
-      
+
       return result;
    }
    else
    {
       // ✅ FECHAMENTO PARCIAL USANDO OrderSend OFICIAL
-      m_logger.Info(StringFormat("Fechando posição #%d parcialmente: %.2f de %.2f lotes", 
-                                ticket, volume, currentVolume));
-      
+      m_logger.Info(StringFormat("Fechando posição #%d parcialmente: %.2f de %.2f lotes",
+                                 ticket, volume, currentVolume));
+
       return ClosePartialPosition(ticket, volume);
    }
 }
@@ -977,28 +982,28 @@ bool CTradeExecutor::ApplyMATrailingStop(ulong ticket, string symbol, ENUM_TIMEF
 //+------------------------------------------------------------------+
 bool CTradeExecutor::IsRetryableError(int error_code)
 {
-   switch(error_code)
+   switch (error_code)
    {
-      case TRADE_RETCODE_REQUOTE:          // Requote
-      case TRADE_RETCODE_CONNECTION:       // Sem conexão
-      case TRADE_RETCODE_PRICE_CHANGED:    // Preço mudou
-      case TRADE_RETCODE_TIMEOUT:          // Timeout
-      case TRADE_RETCODE_PRICE_OFF:        // Preço inválido
-      case TRADE_RETCODE_REJECT:           // Requisição rejeitada
-      case TRADE_RETCODE_TOO_MANY_REQUESTS: // Muitas requisições
-         return true;
-         
-      case TRADE_RETCODE_INVALID_VOLUME:   // Volume inválido
-      case TRADE_RETCODE_INVALID_PRICE:    // Preço inválido
-      case TRADE_RETCODE_INVALID_STOPS:    // Stops inválidos
-      case TRADE_RETCODE_TRADE_DISABLED:   // Trading desabilitado
-      case TRADE_RETCODE_MARKET_CLOSED:    // Mercado fechado
-      case TRADE_RETCODE_NO_MONEY:         // Sem dinheiro
-      case TRADE_RETCODE_POSITION_CLOSED:  // Posição já fechada
-         return false;
-         
-      default:
-         return false;
+   case TRADE_RETCODE_REQUOTE:           // Requote
+   case TRADE_RETCODE_CONNECTION:        // Sem conexão
+   case TRADE_RETCODE_PRICE_CHANGED:     // Preço mudou
+   case TRADE_RETCODE_TIMEOUT:           // Timeout
+   case TRADE_RETCODE_PRICE_OFF:         // Preço inválido
+   case TRADE_RETCODE_REJECT:            // Requisição rejeitada
+   case TRADE_RETCODE_TOO_MANY_REQUESTS: // Muitas requisições
+      return true;
+
+   case TRADE_RETCODE_INVALID_VOLUME:  // Volume inválido
+   case TRADE_RETCODE_INVALID_PRICE:   // Preço inválido
+   case TRADE_RETCODE_INVALID_STOPS:   // Stops inválidos
+   case TRADE_RETCODE_TRADE_DISABLED:  // Trading desabilitado
+   case TRADE_RETCODE_MARKET_CLOSED:   // Mercado fechado
+   case TRADE_RETCODE_NO_MONEY:        // Sem dinheiro
+   case TRADE_RETCODE_POSITION_CLOSED: // Posição já fechada
+      return false;
+
+   default:
+      return false;
    }
 }
 //+------------------------------------------------------------------+
@@ -1053,19 +1058,19 @@ double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoin
       {
          // ✅ APÓS breakeven: SL nunca pode ir abaixo da entrada
          newStopLoss = MathMax(newStopLoss, entryPrice);
-         
+
          if (m_logger != NULL)
          {
             static datetime lastBreakevenLog = 0;
             if (TimeCurrent() - lastBreakevenLog > 300) // A cada 5 minutos
             {
-               m_logger.Debug(StringFormat("Trailing #%d PÓS-BREAKEVEN: SL mínimo = entrada (%.5f)", 
-                                         ticket, entryPrice));
+               m_logger.Debug(StringFormat("Trailing #%d PÓS-BREAKEVEN: SL mínimo = entrada (%.5f)",
+                                           ticket, entryPrice));
                lastBreakevenLog = TimeCurrent();
             }
          }
       }
-      
+
       // ✅ SEMPRE: NUNCA mover SL para trás
       newStopLoss = MathMax(newStopLoss, currentStopLoss);
 
@@ -1087,19 +1092,19 @@ double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoin
       {
          // ✅ APÓS breakeven: SL nunca pode ir acima da entrada
          newStopLoss = MathMin(newStopLoss, entryPrice);
-         
+
          if (m_logger != NULL)
          {
             static datetime lastBreakevenLog = 0;
             if (TimeCurrent() - lastBreakevenLog > 300) // A cada 5 minutos
             {
-               m_logger.Debug(StringFormat("Trailing #%d PÓS-BREAKEVEN: SL máximo = entrada (%.5f)", 
-                                         ticket, entryPrice));
+               m_logger.Debug(StringFormat("Trailing #%d PÓS-BREAKEVEN: SL máximo = entrada (%.5f)",
+                                           ticket, entryPrice));
                lastBreakevenLog = TimeCurrent();
             }
          }
       }
-      
+
       // ✅ SEMPRE: NUNCA mover SL para trás
       newStopLoss = MathMin(newStopLoss, currentStopLoss);
 
@@ -1125,13 +1130,13 @@ double CTradeExecutor::CalculateFixedTrailingStop(ulong ticket, double fixedPoin
       {
          profitPoints = (entryPrice - currentPrice) / point;
       }
-      
+
       static datetime lastDetailLog = 0;
       if (TimeCurrent() - lastDetailLog > 60) // A cada minuto
       {
          m_logger.Debug(StringFormat("Trailing #%d: preço=%.5f, lucro=%.1fpts, SL_atual=%.5f, SL_novo=%.5f, breakeven=%s",
-                                   ticket, currentPrice, profitPoints, currentStopLoss, newStopLoss,
-                                   breakevenTriggered ? "SIM" : "NÃO"));
+                                     ticket, currentPrice, profitPoints, currentStopLoss, newStopLoss,
+                                     breakevenTriggered ? "SIM" : "NÃO"));
          lastDetailLog = TimeCurrent();
       }
    }
@@ -1152,7 +1157,7 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // ✅ Verificar se o contexto de mercado está disponível
    if (m_marketcontext == NULL)
    {
@@ -1162,7 +1167,7 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // ✅ Verificar se o contexto tem dados válidos
    if (!m_marketcontext.HasValidData())
    {
@@ -1172,7 +1177,7 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // ✅ Atualizar contexto para o símbolo correto
    if (!m_marketcontext.UpdateSymbol(symbol))
    {
@@ -1182,7 +1187,7 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // Verificar se a posição existe
    if (!PositionSelectByTicket(ticket))
    {
@@ -1192,13 +1197,13 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // Obter informações da posição
    double openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
    int digits = (int)SymbolInfoInteger(symbol, SYMBOL_DIGITS);
-   
+
    // Verificar se os valores são válidos
    if (openPrice <= 0 || currentPrice <= 0)
    {
@@ -1208,9 +1213,9 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // ✅ Obter handle do ATR através do contexto de mercado
-   CIndicatorHandle* atrHandle = m_marketcontext.GetATRHandle(timeframe);
+   CIndicatorHandle *atrHandle = m_marketcontext.GetATRHandle(timeframe);
    if (atrHandle == NULL || !atrHandle.IsValid())
    {
       if (m_logger != NULL)
@@ -1219,7 +1224,7 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // ✅ Copiar valores do ATR usando o método do handle
    double atrValues[];
    // ✅ Configurar array como série temporal
@@ -1232,12 +1237,12 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
          m_logger.Error("Falha ao copiar valores do ATR: " + IntegerToString(GetLastError()));
       }
       return 0.0;
-   }  
-  
+   }
+
    // Calcular distância baseada no ATR
    double atrValue = atrValues[0];
    double stopDistance = atrValue * atrMultiplier;
-   
+
    // Verificar se o valor do ATR é válido
    if (atrValue <= 0 || stopDistance <= 0)
    {
@@ -1247,7 +1252,7 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // Calcular novo stop loss
    double newStopLoss = 0.0;
    if (posType == POSITION_TYPE_BUY)
@@ -1284,16 +1289,16 @@ double CTradeExecutor::CalculateATRTrailingStop(string symbol, ENUM_TIMEFRAMES t
       }
       return 0.0;
    }
-   
+
    // Normalizar o stop loss
    newStopLoss = NormalizeDouble(newStopLoss, digits);
-   
+
    if (m_logger != NULL)
    {
       m_logger.Debug(StringFormat("Trailing stop ATR calculado para posição #%d: %.5f (ATR: %.5f)",
                                   ticket, newStopLoss, atrValue));
    }
-   
+
    return newStopLoss;
 }
 //+------------------------------------------------------------------+
@@ -1481,7 +1486,7 @@ void CTradeExecutor::ManageTrailingStops()
       if (m_logger != NULL)
       {
          m_logger.Info(StringFormat("ManageTrailingStops: Gerenciando %d configurações ativas", size));
-         
+
          // ✅ ADICIONADO: Log detalhado de cada configuração ativa
          for (int j = 0; j < size; j++)
          {
@@ -1490,9 +1495,9 @@ void CTradeExecutor::ManageTrailingStops()
                double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
                double currentSL = PositionGetDouble(POSITION_SL);
                double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-               
+
                m_logger.Info(StringFormat("  Ticket #%d: entrada=%.5f, atual=%.5f, SL=%.5f",
-                                        m_trailingConfigs[j].ticket, entryPrice, currentPrice, currentSL));
+                                          m_trailingConfigs[j].ticket, entryPrice, currentPrice, currentSL));
             }
          }
       }
@@ -1506,7 +1511,7 @@ void CTradeExecutor::ManageTrailingStops()
          if (m_logger != NULL)
          {
             m_logger.Info(StringFormat("Removendo configuração trailing #%d (posição fechada)",
-                                     m_trailingConfigs[i].ticket));
+                                       m_trailingConfigs[i].ticket));
          }
          RemoveTrailingConfig(i);
          size--;
@@ -1525,7 +1530,7 @@ void CTradeExecutor::ManageTrailingStops()
          double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
          double currentSL = PositionGetDouble(POSITION_SL);
          m_logger.Debug(StringFormat("Calculando trailing #%d: preço=%.5f, SL_atual=%.5f",
-                                   m_trailingConfigs[i].ticket, currentPrice, currentSL));
+                                     m_trailingConfigs[i].ticket, currentPrice, currentSL));
       }
 
       // Calcular novo stop loss
@@ -1539,12 +1544,12 @@ void CTradeExecutor::ManageTrailingStops()
          {
             double improvement = MathAbs(newStopLoss - currentStopLoss) / SymbolInfoDouble(m_trailingConfigs[i].symbol, SYMBOL_POINT);
             m_logger.Debug(StringFormat("Resultado cálculo #%d: SL_novo=%.5f, melhoria=%.1f pontos",
-                                      m_trailingConfigs[i].ticket, newStopLoss, improvement));
+                                        m_trailingConfigs[i].ticket, newStopLoss, improvement));
          }
          else
          {
             m_logger.Warning(StringFormat("❌ CRÍTICO: Cálculo #%d retornou 0 - investigar!",
-                                        m_trailingConfigs[i].ticket));
+                                          m_trailingConfigs[i].ticket));
          }
       }
 
@@ -1564,7 +1569,7 @@ void CTradeExecutor::ManageTrailingStops()
                   double oldSL = PositionGetDouble(POSITION_SL);
                   double improvement = MathAbs(newStopLoss - oldSL) / SymbolInfoDouble(m_trailingConfigs[i].symbol, SYMBOL_POINT);
                   m_logger.Info(StringFormat("✅ TRAILING ATUALIZADO #%d: %.5f → %.5f (melhoria: %.1f pontos)",
-                                           m_trailingConfigs[i].ticket, oldSL, newStopLoss, improvement));
+                                             m_trailingConfigs[i].ticket, oldSL, newStopLoss, improvement));
                }
             }
             else
@@ -1572,7 +1577,7 @@ void CTradeExecutor::ManageTrailingStops()
                if (m_logger != NULL)
                {
                   m_logger.Error(StringFormat("❌ FALHA trailing #%d: %s",
-                                            m_trailingConfigs[i].ticket, GetLastErrorDescription()));
+                                              m_trailingConfigs[i].ticket, GetLastErrorDescription()));
                }
             }
          }
@@ -1584,13 +1589,12 @@ void CTradeExecutor::ManageTrailingStops()
                double currentStopLoss = PositionGetDouble(POSITION_SL);
                double improvement = MathAbs(newStopLoss - currentStopLoss) / SymbolInfoDouble(m_trailingConfigs[i].symbol, SYMBOL_POINT);
                m_logger.Debug(StringFormat("Trailing #%d rejeitado: melhoria %.1f < 15 pontos mínimos",
-                                         m_trailingConfigs[i].ticket, improvement));
+                                           m_trailingConfigs[i].ticket, improvement));
             }
          }
       }
    }
 }
-
 
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO COMPLETAMENTE CORRIGIDA: IsPositionReadyForTrailing   |
@@ -1655,7 +1659,7 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
    // ✅ CORREÇÃO CRÍTICA: Verificar se trailing já foi ativado
    // Se SL já está em lucro (acima da entrada para BUY), trailing já está ativo
    bool trailingAlreadyActive = false;
-   
+
    if (posType == POSITION_TYPE_BUY)
    {
       trailingAlreadyActive = (stopLoss > entryPrice);
@@ -1670,7 +1674,7 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
    {
       // Trailing já está ativo, apenas verificar se ainda há lucro suficiente
       bool hasMinimumActiveProfit = (profitPoints >= 10); // Mínimo 10 pontos para manter ativo
-      
+
       // ✅ ADICIONADO: Log detalhado quando trailing já está ativo
       if (m_logger != NULL)
       {
@@ -1678,23 +1682,23 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
          if (TimeCurrent() - lastActiveLog > 300) // A cada 5 minutos
          {
             m_logger.Debug(StringFormat("Trailing #%d JÁ ATIVO: lucro=%.1f, SL=%.5f (%.1f pts acima entrada)",
-                                      ticket, profitPoints, stopLoss, 
-                                      MathAbs(stopLoss - entryPrice) / point));
+                                        ticket, profitPoints, stopLoss,
+                                        MathAbs(stopLoss - entryPrice) / point));
             lastActiveLog = TimeCurrent();
          }
       }
-      
+
       return hasMinimumActiveProfit;
    }
    else
    {
       // Trailing ainda não ativo, verificar condições de ativação inicial
       bool hasMinimumRR = false;
-      
+
       if (stopLoss > 0)
       {
          double riskPoints = 0;
-         
+
          // ✅ CORREÇÃO CRÍTICA: Usar valor absoluto para evitar negativos
          if (posType == POSITION_TYPE_BUY)
          {
@@ -1709,7 +1713,7 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
          {
             double currentRR = profitPoints / riskPoints;
             hasMinimumRR = (currentRR >= TRAILING_ACTIVATION_RR);
-            
+
             // ✅ ADICIONADO: Log detalhado da verificação inicial
             if (m_logger != NULL)
             {
@@ -1717,9 +1721,9 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
                if (TimeCurrent() - lastInitLog > 60) // A cada minuto
                {
                   m_logger.Debug(StringFormat("Trailing #%d VERIFICAÇÃO INICIAL: lucro=%.1f (min=%d), risco=%.1f, R:R=%.2f (min=%.1f), pronto=%s",
-                                           ticket, profitPoints, TRAILING_MIN_PROFIT_POINTS,
-                                           riskPoints, currentRR, TRAILING_ACTIVATION_RR,
-                                           (hasMinimumProfit && hasMinimumRR) ? "SIM" : "NÃO"));
+                                              ticket, profitPoints, TRAILING_MIN_PROFIT_POINTS,
+                                              riskPoints, currentRR, TRAILING_ACTIVATION_RR,
+                                              (hasMinimumProfit && hasMinimumRR) ? "SIM" : "NÃO"));
                   lastInitLog = TimeCurrent();
                }
             }
@@ -1730,7 +1734,7 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
             if (m_logger != NULL)
             {
                m_logger.Warning(StringFormat("Trailing #%d: risco calculado = 0 (SL=%.5f, entrada=%.5f)",
-                                           ticket, stopLoss, entryPrice));
+                                             ticket, stopLoss, entryPrice));
             }
          }
       }
@@ -1740,7 +1744,7 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
          if (m_logger != NULL)
          {
             m_logger.Warning(StringFormat("Trailing #%d: SL não definido (stopLoss=%.5f)",
-                                        ticket, stopLoss));
+                                          ticket, stopLoss));
          }
       }
 
@@ -1805,7 +1809,7 @@ bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
    }
    else if (StringFind(symbol, "WDO") >= 0)
    {
-      minImprovement = breakevenTriggered ? 1 : 2;  // ✅ Reduzido após breakeven
+      minImprovement = breakevenTriggered ? 1 : 2; // ✅ Reduzido após breakeven
    }
    else if (StringFind(symbol, "BIT") >= 0)
    {
@@ -1813,7 +1817,7 @@ bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
    }
    else
    {
-      minImprovement = breakevenTriggered ? 5 : 10;  // ✅ Padrão reduzido após breakeven
+      minImprovement = breakevenTriggered ? 5 : 10; // ✅ Padrão reduzido após breakeven
    }
 
    // Verificar se há melhoria suficiente
@@ -1844,9 +1848,9 @@ bool CTradeExecutor::ShouldUpdateStopLoss(int configIndex, double newStopLoss)
       if (TimeCurrent() - lastDecisionLog > 120) // A cada 2 minutos
       {
          m_logger.Debug(StringFormat("Decisão trailing #%d: melhoria=%.1f, mínimo=%.1f, breakeven=%s, atualizar=%s",
-                                   ticket, improvement, minImprovement, 
-                                   breakevenTriggered ? "SIM" : "NÃO",
-                                   isImprovement ? "SIM" : "NÃO"));
+                                     ticket, improvement, minImprovement,
+                                     breakevenTriggered ? "SIM" : "NÃO",
+                                     isImprovement ? "SIM" : "NÃO"));
          lastDecisionLog = TimeCurrent();
       }
    }
@@ -1909,7 +1913,7 @@ void CTradeExecutor::ManagePartialTakeProfits()
                m_partialConfigs[configIndex].lastPartialTime = currentTime;
                m_partialConfigs[configIndex].lastPartialPrice = currentPrice;
                m_partialConfigs[configIndex].partialsExecuted++;
-               
+
                // ✅ DEFINIR PRÓXIMO R:R NECESSÁRIO
                if (m_partialConfigs[configIndex].partialsExecuted == 1)
                {
@@ -1927,9 +1931,9 @@ void CTradeExecutor::ManagePartialTakeProfits()
                if (m_logger != NULL)
                {
                   m_logger.Info(StringFormat("✅ PARCIAL INTELIGENTE #%d executada: %.2f lotes em %.5f (parcial %d/3, próximo R:R: %.1f)",
-                                           ticket, partialVolume, currentPrice, 
-                                           m_partialConfigs[configIndex].partialsExecuted,
-                                           m_partialConfigs[configIndex].nextPartialRR));
+                                             ticket, partialVolume, currentPrice,
+                                             m_partialConfigs[configIndex].partialsExecuted,
+                                             m_partialConfigs[configIndex].nextPartialRR));
                }
             }
          }
@@ -2431,7 +2435,7 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
 
       // ✅ NOVO: Configurar trailing stop automaticamente após breakeven
       AutoConfigureTrailingStop(m_breakevenConfigs[configIndex].ticket, m_breakevenConfigs[configIndex].symbol);
-      
+
       if (m_logger != NULL)
       {
          m_logger.Info(StringFormat("Trailing stop ativado automaticamente para #%d após breakeven", m_breakevenConfigs[configIndex].ticket));
@@ -2458,29 +2462,29 @@ bool CTradeExecutor::IsBreakevenTriggered(ulong ticket)
 {
    // Verificar se existe configuração de breakeven para esta posição
    int index = FindBreakevenConfigIndex(ticket);
-   
+
    if (index >= 0)
    {
       // Se existe configuração, verificar se foi acionada
       return m_breakevenConfigs[index].wasTriggered;
    }
-   
+
    // Se não existe configuração de breakeven, verificar se SL está em lucro
    // (indica que breakeven foi feito manualmente ou por outro sistema)
    if (!PositionSelectByTicket(ticket))
    {
       return false; // Posição não existe
    }
-   
+
    double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
    double stopLoss = PositionGetDouble(POSITION_SL);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   
+
    if (stopLoss == 0)
    {
       return false; // Sem stop loss definido
    }
-   
+
    // Verificar se SL está em lucro (acima da entrada para BUY, abaixo para SELL)
    if (posType == POSITION_TYPE_BUY)
    {
@@ -2661,7 +2665,7 @@ bool CTradeExecutor::ConfigurePartialControl(ulong ticket, string symbol, double
    m_partialConfigs[size].ticket = ticket;
    m_partialConfigs[size].symbol = symbol;
    m_partialConfigs[size].timeframe = currentTimeframe; // ✅ NOVO: Timeframe automático
-   m_partialConfigs[size].lastPartialTime = 0; // Nunca executou parcial
+   m_partialConfigs[size].lastPartialTime = 0;          // Nunca executou parcial
    m_partialConfigs[size].lastPartialPrice = 0.0;
    m_partialConfigs[size].partialsExecuted = 0;
    m_partialConfigs[size].nextPartialRR = 2.0; // Primeira parcial em 2:1
@@ -2728,7 +2732,7 @@ void CTradeExecutor::CleanupPartialConfigs()
          if (m_logger != NULL)
          {
             m_logger.Debug(StringFormat("Removendo controle de parciais para posição fechada #%d",
-                                      m_partialConfigs[i].ticket));
+                                        m_partialConfigs[i].ticket));
          }
          RemovePartialConfig(i);
       }
@@ -2801,7 +2805,7 @@ bool CTradeExecutor::ShouldTakePartialNowIntelligent(ulong ticket, double curren
          if (TimeCurrent() - lastTimeLog > 60)
          {
             m_logger.Debug(StringFormat("Parcial #%d aguardando tempo mínimo (R:R %.2f atingido)",
-                                      ticket, currentRR));
+                                        ticket, currentRR));
             lastTimeLog = TimeCurrent();
          }
       }
@@ -2817,7 +2821,7 @@ bool CTradeExecutor::ShouldTakePartialNowIntelligent(ulong ticket, double curren
          if (TimeCurrent() - lastDistLog > 60)
          {
             m_logger.Debug(StringFormat("Parcial #%d aguardando distância mínima (R:R %.2f atingido)",
-                                      ticket, currentRR));
+                                        ticket, currentRR));
             lastDistLog = TimeCurrent();
          }
       }
@@ -2833,7 +2837,7 @@ bool CTradeExecutor::ShouldTakePartialNowIntelligent(ulong ticket, double curren
          if (TimeCurrent() - lastMoveLog > 120)
          {
             m_logger.Debug(StringFormat("Parcial #%d aguardando movimento favorável (R:R %.2f atingido)",
-                                      ticket, currentRR));
+                                        ticket, currentRR));
             lastMoveLog = TimeCurrent();
          }
       }
@@ -2929,7 +2933,7 @@ bool CTradeExecutor::IsMinimumTimeElapsed(ulong ticket)
    }
 
    datetime lastPartialTime = m_partialConfigs[configIndex].lastPartialTime;
-   
+
    // Se nunca executou parcial, pode executar
    if (lastPartialTime == 0)
    {
@@ -2956,10 +2960,10 @@ bool CTradeExecutor::IsMinimumTimeElapsed(ulong ticket)
          int elapsedSeconds = (int)(currentTime - lastPartialTime);
          int remainingSeconds = minTimeSeconds - elapsedSeconds;
          int remainingMinutes = remainingSeconds / 60;
-         
+
          m_logger.Debug(StringFormat("⏰ TIMING AUTOMÁTICO #%d: aguardando %d min %d seg (parcial %d, %s %s)",
-                                   ticket, remainingMinutes, remainingSeconds % 60, 
-                                   partialNumber, symbol, EnumToString(timeframe)));
+                                     ticket, remainingMinutes, remainingSeconds % 60,
+                                     partialNumber, symbol, EnumToString(timeframe)));
          lastLog = currentTime;
       }
    }
@@ -2979,7 +2983,7 @@ bool CTradeExecutor::IsMinimumDistanceAchieved(ulong ticket, double currentPrice
    }
 
    double lastPartialPrice = m_partialConfigs[configIndex].lastPartialPrice;
-   
+
    // Se nunca executou parcial, pode executar
    if (lastPartialPrice == 0.0)
    {
@@ -2988,7 +2992,7 @@ bool CTradeExecutor::IsMinimumDistanceAchieved(ulong ticket, double currentPrice
 
    string symbol = m_partialConfigs[configIndex].symbol;
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   
+
    if (point <= 0)
    {
       return true; // Fallback
@@ -2996,7 +3000,7 @@ bool CTradeExecutor::IsMinimumDistanceAchieved(ulong ticket, double currentPrice
 
    // ✅ DISTÂNCIA MÍNIMA BASEADA NO SÍMBOLO
    double minDistancePoints = 50; // Padrão
-   
+
    if (StringFind(symbol, "WIN") >= 0)
    {
       minDistancePoints = 100; // 100 pontos para WIN
@@ -3039,7 +3043,7 @@ bool CTradeExecutor::IsPriceMovingFavorably(ulong ticket, double currentPrice)
    if (lastPartialPrice == 0.0)
    {
       double entryPrice = m_partialConfigs[configIndex].entryPrice;
-      
+
       if (posType == POSITION_TYPE_BUY)
       {
          return currentPrice > entryPrice; // Preço acima da entrada
@@ -3077,10 +3081,10 @@ void CTradeExecutor::ManageOpenPositions()
    // ✅ CORREÇÃO CRÍTICA: SEQUÊNCIA CORRETA DE GERENCIAMENTO
    // 1. PRIMEIRO: Gerenciar breakevens (prioridade máxima)
    ManageBreakevens();
-   
+
    // 2. SEGUNDO: Gerenciar trailing stops (após breakeven)
    ManageTrailingStops();
-   
+
    // 3. TERCEIRO: Gerenciar parciais
    ManagePartialTakeProfits();
 
@@ -3280,109 +3284,109 @@ bool CTradeExecutor::ValidateAndAdjustStops(string symbol, ENUM_ORDER_TYPE order
 bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_volume)
 {
    // Validar e selecionar posição
-   if(!PositionSelectByTicket(position_ticket))
+   if (!PositionSelectByTicket(position_ticket))
    {
       m_lastError = ERR_TRADE_POSITION_NOT_FOUND;
       m_lastErrorDesc = "Posição não encontrada: " + IntegerToString(position_ticket);
       m_logger.Error(m_lastErrorDesc);
       return false;
    }
-   
+
    // Obter informações da posição
    string symbol = PositionGetString(POSITION_SYMBOL);
    double currentVolume = PositionGetDouble(POSITION_VOLUME);
    ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   
+
    // Validar volume parcial
-   if(partial_volume <= 0)
+   if (partial_volume <= 0)
    {
       m_lastError = ERR_TRADE_WRONG_PROPERTY;
       m_lastErrorDesc = "Volume inválido para fechamento parcial: " + DoubleToString(partial_volume, 2);
       m_logger.Error(m_lastErrorDesc);
       return false;
    }
-   
+
    // Se volume >= volume total, fechar posição inteira
-   if(partial_volume >= currentVolume)
+   if (partial_volume >= currentVolume)
    {
-      m_logger.Info(StringFormat("Volume parcial (%.2f) >= volume total (%.2f), fechando posição inteira #%d", 
-                                partial_volume, currentVolume, position_ticket));
+      m_logger.Info(StringFormat("Volume parcial (%.2f) >= volume total (%.2f), fechando posição inteira #%d",
+                                 partial_volume, currentVolume, position_ticket));
       return m_trade.PositionClose(position_ticket);
    }
-   
+
    // ✅ IMPLEMENTAÇÃO OFICIAL MQL5 PARA FECHAMENTO PARCIAL
-   m_logger.Info(StringFormat("Executando fechamento parcial: %.2f de %.2f lotes (posição #%d)", 
-                             partial_volume, currentVolume, position_ticket));
-   
+   m_logger.Info(StringFormat("Executando fechamento parcial: %.2f de %.2f lotes (posição #%d)",
+                              partial_volume, currentVolume, position_ticket));
+
    // Obter preço atual
    MqlTick tick;
-   if(!SymbolInfoTick(symbol, tick))
+   if (!SymbolInfoTick(symbol, tick))
    {
       m_lastError = ERR_TRADE_DEAL_NOT_FOUND;
       m_lastErrorDesc = "Falha ao obter tick para " + symbol;
       m_logger.Error(m_lastErrorDesc);
       return false;
    }
-   
+
    // ✅ PREPARAR ESTRUTURAS OFICIAIS MQL5
    MqlTradeRequest request = {};
    MqlTradeResult result = {};
-   
+
    // ✅ CONFIGURAR REQUISIÇÃO DE FECHAMENTO PARCIAL
-   request.action = TRADE_ACTION_DEAL;           // ✅ Ação oficial para fechamento
-   request.position = position_ticket;           // ✅ Ticket da posição a fechar
-   request.symbol = symbol;                      // ✅ Símbolo da posição
-   request.volume = partial_volume;              // ✅ Volume parcial a fechar
-   request.magic = MAGIC_NUMBER;                      // ✅ Magic number
-   request.comment = "Fechamento Parcial";      // ✅ Comentário
-   request.deviation = 3;                        // ✅ Desvio permitido
-   
+   request.action = TRADE_ACTION_DEAL;     // ✅ Ação oficial para fechamento
+   request.position = position_ticket;     // ✅ Ticket da posição a fechar
+   request.symbol = symbol;                // ✅ Símbolo da posição
+   request.volume = partial_volume;        // ✅ Volume parcial a fechar
+   request.magic = MAGIC_NUMBER;           // ✅ Magic number
+   request.comment = "Fechamento Parcial"; // ✅ Comentário
+   request.deviation = 3;                  // ✅ Desvio permitido
+
    // ✅ DETERMINAR TIPO DE ORDEM PARA FECHAMENTO
-   if(posType == POSITION_TYPE_BUY)
+   if (posType == POSITION_TYPE_BUY)
    {
-      request.type = ORDER_TYPE_SELL;            // ✅ Vender para fechar compra
-      request.price = tick.bid;                  // ✅ Preço de venda
+      request.type = ORDER_TYPE_SELL; // ✅ Vender para fechar compra
+      request.price = tick.bid;       // ✅ Preço de venda
    }
    else
    {
-      request.type = ORDER_TYPE_BUY;             // ✅ Comprar para fechar venda
-      request.price = tick.ask;                  // ✅ Preço de compra
+      request.type = ORDER_TYPE_BUY; // ✅ Comprar para fechar venda
+      request.price = tick.ask;      // ✅ Preço de compra
    }
-   
+
    // ✅ EXECUTAR FECHAMENTO PARCIAL COM RETRY
    bool success = false;
    int retries = 0;
-   
-   while(retries < m_maxRetries && !success)
+
+   while (retries < m_maxRetries && !success)
    {
-      if(retries > 0)
+      if (retries > 0)
       {
          m_logger.Warning(StringFormat("Tentativa %d de %d para fechamento parcial", retries + 1, m_maxRetries));
          Sleep(m_retryDelay);
-         
+
          // Atualizar preço para retry
-         if(!SymbolInfoTick(symbol, tick))
+         if (!SymbolInfoTick(symbol, tick))
          {
             m_logger.Error("Falha ao atualizar tick para retry");
             break;
          }
          request.price = (posType == POSITION_TYPE_BUY) ? tick.bid : tick.ask;
       }
-      
+
       // ✅ EXECUTAR ORDEM DE FECHAMENTO PARCIAL
       success = OrderSend(request, result);
-      
-      if(!success)
+
+      if (!success)
       {
          m_lastError = (int)result.retcode;
          m_lastErrorDesc = "Erro no fechamento parcial: " + IntegerToString(result.retcode);
-         
+
          // Log detalhado do erro
-         m_logger.Error(StringFormat("Erro OrderSend: retcode=%d, deal=%d, order=%d", 
-                                   result.retcode, result.deal, result.order));
-         
+         m_logger.Error(StringFormat("Erro OrderSend: retcode=%d, deal=%d, order=%d",
+                                     result.retcode, result.deal, result.order));
+
          // Verificar se erro é recuperável
-         if(!IsRetryableError(result.retcode))
+         if (!IsRetryableError(result.retcode))
          {
             m_logger.Error(StringFormat("Erro não recuperável no fechamento parcial: %d", result.retcode));
             break;
@@ -3391,32 +3395,32 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
       else
       {
          // ✅ SUCESSO - LOG DETALHADO
-         m_logger.Info(StringFormat("✅ FECHAMENTO PARCIAL EXECUTADO: %.2f lotes da posição #%d", 
-                                  partial_volume, position_ticket));
-         m_logger.Info(StringFormat("Deal: #%d, Order: #%d, Volume: %.2f, Preço: %.5f", 
-                                  result.deal, result.order, result.volume, result.price));
+         m_logger.Info(StringFormat("✅ FECHAMENTO PARCIAL EXECUTADO: %.2f lotes da posição #%d",
+                                    partial_volume, position_ticket));
+         m_logger.Info(StringFormat("Deal: #%d, Order: #%d, Volume: %.2f, Preço: %.5f",
+                                    result.deal, result.order, result.volume, result.price));
       }
-      
+
       retries++;
    }
-   
+
    // ✅ VALIDAR RESULTADO E VOLUME RESTANTE
-   if(success)
+   if (success)
    {
       // Verificar volume restante na posição
-      if(PositionSelectByTicket(position_ticket))
+      if (PositionSelectByTicket(position_ticket))
       {
          double remainingVolume = PositionGetDouble(POSITION_VOLUME);
          double expectedRemaining = currentVolume - partial_volume;
-         
-         m_logger.Info(StringFormat("Volume restante na posição #%d: %.2f lotes (esperado: %.2f)", 
-                                  position_ticket, remainingVolume, expectedRemaining));
-         
+
+         m_logger.Info(StringFormat("Volume restante na posição #%d: %.2f lotes (esperado: %.2f)",
+                                    position_ticket, remainingVolume, expectedRemaining));
+
          // Validar se volume restante está correto (com tolerância)
-         if(MathAbs(remainingVolume - expectedRemaining) > 0.01)
+         if (MathAbs(remainingVolume - expectedRemaining) > 0.01)
          {
-            m_logger.Warning(StringFormat("⚠️ Volume restante diverge do esperado: %.2f vs %.2f", 
-                                        remainingVolume, expectedRemaining));
+            m_logger.Warning(StringFormat("⚠️ Volume restante diverge do esperado: %.2f vs %.2f",
+                                          remainingVolume, expectedRemaining));
          }
       }
       else
@@ -3426,10 +3430,10 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
    }
    else
    {
-      m_logger.Error(StringFormat("❌ FALHA NO FECHAMENTO PARCIAL da posição #%d: %s", 
-                                position_ticket, m_lastErrorDesc));
+      m_logger.Error(StringFormat("❌ FALHA NO FECHAMENTO PARCIAL da posição #%d: %s",
+                                  position_ticket, m_lastErrorDesc));
    }
-   
+
    return success;
 }
 
@@ -3443,21 +3447,21 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
 int CTradeExecutor::CalculateAutomaticTiming(string symbol, ENUM_TIMEFRAMES timeframe, int partialNumber)
 {
    // ✅ FÓRMULA DOS ESPECIALISTAS: Tempo = TempoBase × MultiplcadorAtivo × MultiplicadorParcial
-   
+
    int baseTimeSeconds = GetBaseTimeByTimeframe(timeframe);
    double assetMultiplier = GetAssetMultiplier(symbol);
    double partialMultiplier = GetPartialMultiplier(partialNumber);
-   
+
    // ✅ MULTIPLICADORES ADICIONAIS PARA REFINAMENTO
    double volatilityMultiplier = GetVolatilityMultiplier(symbol);
    double sessionMultiplier = GetSessionMultiplier(symbol);
-   
+
    // Cálculo final
    double finalTime = baseTimeSeconds * assetMultiplier * partialMultiplier * volatilityMultiplier * sessionMultiplier;
-   
+
    // Garantir mínimo de 30 segundos e máximo de 24 horas
    int result = (int)MathMax(30, MathMin(86400, finalTime));
-   
+
    // ✅ LOG PARA ANÁLISE E OTIMIZAÇÃO
    if (m_logger != NULL)
    {
@@ -3465,12 +3469,12 @@ int CTradeExecutor::CalculateAutomaticTiming(string symbol, ENUM_TIMEFRAMES time
       if (TimeCurrent() - lastDetailLog > 300) // Log detalhado a cada 5 minutos
       {
          m_logger.Debug(StringFormat("📊 TIMING CALCULADO para %s %s parcial %d: %d seg (base:%d × ativo:%.1f × parcial:%.1f × vol:%.1f × sessão:%.1f)",
-                                   symbol, EnumToString(timeframe), partialNumber, result,
-                                   baseTimeSeconds, assetMultiplier, partialMultiplier, volatilityMultiplier, sessionMultiplier));
+                                     symbol, EnumToString(timeframe), partialNumber, result,
+                                     baseTimeSeconds, assetMultiplier, partialMultiplier, volatilityMultiplier, sessionMultiplier));
          lastDetailLog = TimeCurrent();
       }
    }
-   
+
    return result;
 }
 
@@ -3479,17 +3483,26 @@ int CTradeExecutor::CalculateAutomaticTiming(string symbol, ENUM_TIMEFRAMES time
 //+------------------------------------------------------------------+
 int CTradeExecutor::GetBaseTimeByTimeframe(ENUM_TIMEFRAMES timeframe)
 {
-   switch(timeframe)
+   switch (timeframe)
    {
-      case PERIOD_M1:  return 120;    // 2 minutos base (movimentos ultra-rápidos)
-      case PERIOD_M3:  return 360;    // 6 minutos base (scalping avançado)
-      case PERIOD_M5:  return 600;    // 10 minutos base (movimentos rápidos)
-      case PERIOD_M15: return 1800;   // 30 minutos base (movimentos médios)
-      case PERIOD_M30: return 3600;   // 1 hora base
-      case PERIOD_H1:  return 7200;   // 2 horas base (movimentos lentos)
-      case PERIOD_H4:  return 21600;  // 6 horas base (movimentos muito lentos)
-      case PERIOD_D1:  return 86400;  // 1 dia base (swing trading)
-      default:         return 600;    // Padrão: 10 minutos
+   case PERIOD_M1:
+      return 120; // 2 minutos base (movimentos ultra-rápidos)
+   case PERIOD_M3:
+      return 360; // 6 minutos base (scalping avançado)
+   case PERIOD_M5:
+      return 600; // 10 minutos base (movimentos rápidos)
+   case PERIOD_M15:
+      return 1800; // 30 minutos base (movimentos médios)
+   case PERIOD_M30:
+      return 3600; // 1 hora base
+   case PERIOD_H1:
+      return 7200; // 2 horas base (movimentos lentos)
+   case PERIOD_H4:
+      return 21600; // 6 horas base (movimentos muito lentos)
+   case PERIOD_D1:
+      return 86400; // 1 dia base (swing trading)
+   default:
+      return 600; // Padrão: 10 minutos
    }
 }
 
@@ -3499,7 +3512,7 @@ int CTradeExecutor::GetBaseTimeByTimeframe(ENUM_TIMEFRAMES timeframe)
 double CTradeExecutor::GetAssetMultiplier(string symbol)
 {
    // ✅ BASEADO EM ANÁLISE DE VOLATILIDADE HISTÓRICA DOS ATIVOS
-   
+
    if (StringFind(symbol, "BTC") >= 0 || StringFind(symbol, "BIT") >= 0)
    {
       return 0.7; // Bitcoin: muito volátil, timing mais rápido
@@ -3516,12 +3529,12 @@ double CTradeExecutor::GetAssetMultiplier(string symbol)
    {
       return 0.8; // Ethereum: alta volatilidade
    }
-   else if (StringFind(symbol, "PETR") >= 0 || StringFind(symbol, "VALE") >= 0 || 
+   else if (StringFind(symbol, "PETR") >= 0 || StringFind(symbol, "VALE") >= 0 ||
             StringFind(symbol, "ITUB") >= 0 || StringFind(symbol, "BBDC") >= 0)
    {
       return 2.0; // Ações blue chips: menos voláteis
    }
-   else if (StringFind(symbol, "USD") >= 0 || StringFind(symbol, "EUR") >= 0 || 
+   else if (StringFind(symbol, "USD") >= 0 || StringFind(symbol, "EUR") >= 0 ||
             StringFind(symbol, "GBP") >= 0 || StringFind(symbol, "JPY") >= 0)
    {
       return 1.8; // Forex majors: movimentos mais lentos
@@ -3542,12 +3555,16 @@ double CTradeExecutor::GetAssetMultiplier(string symbol)
 double CTradeExecutor::GetPartialMultiplier(int partialNumber)
 {
    // ✅ RECOMENDAÇÃO DE LARRY WILLIAMS: Timing progressivo
-   switch(partialNumber)
+   switch (partialNumber)
    {
-      case 1: return 0.5; // 1ª parcial: mais rápida (proteção de capital)
-      case 2: return 1.0; // 2ª parcial: timing normal
-      case 3: return 1.5; // 3ª parcial: mais lenta (captura de movimento)
-      default: return 1.0;
+   case 1:
+      return 0.5; // 1ª parcial: mais rápida (proteção de capital)
+   case 2:
+      return 1.0; // 2ª parcial: timing normal
+   case 3:
+      return 1.5; // 3ª parcial: mais lenta (captura de movimento)
+   default:
+      return 1.0;
    }
 }
 
@@ -3558,14 +3575,14 @@ double CTradeExecutor::GetVolatilityMultiplier(string symbol)
 {
    // ✅ ANÁLISE SIMPLIFICADA DE VOLATILIDADE ATUAL
    // Em implementação futura: usar ATR ou desvio padrão
-   
+
    datetime currentTime = TimeCurrent();
    MqlDateTime timeStruct;
    TimeToStruct(currentTime, timeStruct);
-   
+
    // Horários de maior volatilidade = timing mais rápido
    int hour = timeStruct.hour;
-   
+
    if (StringFind(symbol, "WIN") >= 0 || StringFind(symbol, "WDO") >= 0)
    {
       // Mercado brasileiro
@@ -3586,7 +3603,7 @@ double CTradeExecutor::GetVolatilityMultiplier(string symbol)
          return 0.9; // Horários de maior atividade
       }
    }
-   
+
    return 1.0; // Padrão
 }
 
@@ -3598,12 +3615,12 @@ double CTradeExecutor::GetSessionMultiplier(string symbol)
    datetime currentTime = TimeCurrent();
    MqlDateTime timeStruct;
    TimeToStruct(currentTime, timeStruct);
-   
+
    int hour = timeStruct.hour;
    int dayOfWeek = timeStruct.day_of_week;
-   
+
    // ✅ ANÁLISE POR SESSÃO DE MERCADO
-   
+
    if (StringFind(symbol, "WIN") >= 0 || StringFind(symbol, "WDO") >= 0)
    {
       // Mercado brasileiro (9h-18h)
@@ -3632,7 +3649,6 @@ double CTradeExecutor::GetSessionMultiplier(string symbol)
          return 0.9; // Sobreposição de sessões = mais atividade
       }
    }
-   
+
    return 1.0; // Padrão
 }
-

@@ -9,6 +9,8 @@
 
 #include "Structures.mqh"
 
+#ifndef LOGGER_MQH
+#define LOGGER_MQH
 //+------------------------------------------------------------------+
 //| Classe para gerenciamento de logs                                |
 //+------------------------------------------------------------------+
@@ -403,3 +405,5 @@ void CLogger::SendAlert(string message, bool notifyTerminal = true, bool sendEma
    // Registrar alerta no log
    Info("ALERT: " + message);
 }
+
+#endif LOGGER_MQH
