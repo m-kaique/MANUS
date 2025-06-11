@@ -1,7 +1,6 @@
 #ifndef DRAWDOWNCONTROLLER_MQH
 #define DRAWDOWNCONTROLLER_MQH
 
-#include "Logger.mqh"
 
 //+------------------------------------------------------------------+
 //| Níveis de drawdown                                               |

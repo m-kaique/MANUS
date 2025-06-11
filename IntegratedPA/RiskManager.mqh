@@ -136,9 +136,10 @@ private:
    PARTIAL_STRATEGY DetermineOptimalStrategy(string symbol, double volume, 
                                            LotCharacteristics &lotChar, 
                                            double &percentages[], int numPartials);
-   AdaptivePartialConfig ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config, 
-                                           LotCharacteristics &lotChar, 
-                                           double &percentages[], int numPartials);
+   AdaptivePartialConfig ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config,
+                                           LotCharacteristics &lotChar,
+                                           double &percentages[], int numPartials,
+                                           SETUP_QUALITY quality);
    AdaptivePartialConfig ApplyAdaptiveStrategy(string symbol, AdaptivePartialConfig &config, 
                                              LotCharacteristics &lotChar, 
                                              double &percentages[], int numPartials);
@@ -780,7 +781,7 @@ AdaptivePartialConfig CRiskManager::CalculateUniversalPartials(string symbol, do
          break;
          
       case PARTIAL_STRATEGY_SCALED:
-         config = ApplyScaledStrategy(symbol, config, lotChar, originalPercentages, numPartials);
+         config = ApplyScaledStrategy(symbol, config, lotChar, originalPercentages, numPartials, quality);
          break;
          
       case PARTIAL_STRATEGY_ADAPTIVE:
@@ -911,9 +912,10 @@ PARTIAL_STRATEGY CRiskManager::DetermineOptimalStrategy(string symbol, double vo
 //| Aplica estratégia de volume escalado com verificações extras    |
 //| (limites por símbolo, detecção de outliers e controle por equity)|
 //+------------------------------------------------------------------+
-AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config, 
-                                                       LotCharacteristics &lotChar, 
-                                                       double &percentages[], int numPartials)
+AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptivePartialConfig &config,
+                                                       LotCharacteristics &lotChar,
+                                                       double &percentages[], int numPartials,
+                                                       SETUP_QUALITY quality)
 {
    // ✅ CORREÇÃO #1: Encontrar menor percentual com validação
    double smallestPercentage = 1.0;
@@ -1031,7 +1033,7 @@ AdaptivePartialConfig CRiskManager::ApplyScaledStrategy(string symbol, AdaptiveP
    // ✅ LOG DETALHADO PARA DEBUGGING
    if (m_logger != NULL)
    {
-      m_logger.LogVolumeScaling(symbol, signal.quality, config.originalVolume, config.finalVolume,
+      m_logger.LogVolumeScaling(symbol, quality, config.originalVolume, config.finalVolume,
                                "Partial scaling");
       m_logger.Debug(StringFormat("📊 DETALHES: menor percentual: %.3f%%, volume mínimo calculado: %.2f",
                                 smallestPercentage * 100, minVolumeNeeded));
