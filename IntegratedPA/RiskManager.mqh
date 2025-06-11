@@ -22,6 +22,41 @@
 #include "CircuitBreaker.mqh"
 
 //+------------------------------------------------------------------+
+//| Setup-risk correlation matrix                                    |
+//+------------------------------------------------------------------+
+struct SetupRiskMatrix
+{
+   ENUM_SETUP_QUALITY quality;   // Qualidade do setup
+   int                minFactors;// Fatores mínimos de confluência
+   double             minRiskReward; // R:R mínimo
+   double             maxScaling;    // Escalonamento máximo permitido
+   bool               allowPartials; // Permite parciais
+};
+
+// Matriz de correlação padrão
+SetupRiskMatrix riskMatrix[] =
+   {
+      {SETUP_A_PLUS, 6, 3.0, 5.0, true},
+      {SETUP_A,      5, 2.5, 3.0, true},
+      {SETUP_B,      3, 2.0, 2.0, true},
+      {SETUP_C,      1, 1.5, 1.0, false}
+   };
+
+// Avaliar qualidade de setup com base em fatores e R:R
+ENUM_SETUP_QUALITY EvaluateSetupQuality(int factors, double riskReward)
+{
+   for(int i=0;i<ArraySize(riskMatrix);i++)
+   {
+      if(factors>=riskMatrix[i].minFactors &&
+         riskReward>=riskMatrix[i].minRiskReward)
+      {
+         return(riskMatrix[i].quality);
+      }
+   }
+   return(SETUP_C);
+}
+
+//+------------------------------------------------------------------+
 //| Classe para gestão de risco e dimensionamento de posições        |
 //+------------------------------------------------------------------+
 class CRiskManager {
@@ -87,10 +122,11 @@ private:
    // ✅ NOVOS MÉTODOS PARA PARCIAIS UNIVERSAIS - CORRIGIDOS PARA MQL5
    ASSET_TYPE ClassifyAssetType(string symbol);
    LotCharacteristics GetLotCharacteristics(string symbol);
-   AdaptivePartialConfig CalculateUniversalPartials(string symbol, double baseVolume, 
-                                                   double &originalPercentages[], 
-                                                   double &originalLevels[], 
-                                                   int numPartials);
+   AdaptivePartialConfig CalculateUniversalPartials(string symbol, double baseVolume,
+                                                   double &originalPercentages[],
+                                                   double &originalLevels[],
+                                                   int numPartials,
+                                                   ENUM_SETUP_QUALITY quality);
    PARTIAL_STRATEGY DetermineOptimalStrategy(string symbol, double volume, 
                                            LotCharacteristics &lotChar, 
                                            double &percentages[], int numPartials);
@@ -114,6 +150,8 @@ private:
    void LogPartialDecision(string symbol, AdaptivePartialConfig &config);
    void UpdatePartialMetrics(AdaptivePartialConfig &config);
    double GetScalingTier(SETUP_QUALITY quality, double requiredFactor, double maxFactor);
+   double CalculateRiskBasedScaling(ENUM_SETUP_QUALITY quality, double baseScaling);
+   bool   ValidateSetupForScaling(ENUM_SETUP_QUALITY quality, double requestedScaling);
 
 public:
    // ✅ CONSTRUTORES E DESTRUTOR ORIGINAIS MANTIDOS
@@ -693,10 +731,11 @@ LotCharacteristics CRiskManager::GetLotCharacteristics(string symbol)
 //| ✅ FUNÇÃO CORRIGIDA: CalculateUniversalPartials                |
 //| Calcula parciais universais para qualquer tipo de ativo        |
 //+------------------------------------------------------------------+
-AdaptivePartialConfig CRiskManager::CalculateUniversalPartials(string symbol, double baseVolume, 
-                                                              double &originalPercentages[], 
-                                                              double &originalLevels[], 
-                                                              int numPartials)
+AdaptivePartialConfig CRiskManager::CalculateUniversalPartials(string symbol, double baseVolume,
+                                                              double &originalPercentages[],
+                                                              double &originalLevels[],
+                                                              int numPartials,
+                                                              ENUM_SETUP_QUALITY quality)
 {
    AdaptivePartialConfig config;
    
@@ -743,6 +782,35 @@ AdaptivePartialConfig CRiskManager::CalculateUniversalPartials(string symbol, do
          config.enabled = false;
          config.reason = "Tipo de ativo não suporta parciais efetivas";
          break;
+   }
+
+   // Aplicar correlação qualidade-risco ao fator de escalonamento
+   double allowedFactor = CalculateRiskBasedScaling(quality, config.scalingFactor);
+   if(!ValidateSetupForScaling(quality, allowedFactor))
+   {
+      config.enabled = false;
+      config.finalVolume = config.originalVolume;
+      config.scalingFactor = 1.0;
+      config.reason = "Qualidade do setup não permite escalonamento";
+   }
+   else if(allowedFactor < config.scalingFactor)
+   {
+      config.finalVolume = config.originalVolume * allowedFactor;
+      config.scalingFactor = allowedFactor;
+   }
+
+   // Logging detalhado da correlação qualidade-risco
+   for(int i=0;i<ArraySize(riskMatrix);i++)
+   {
+      if(riskMatrix[i].quality==quality && m_logger!=NULL)
+      {
+         m_logger.Info(StringFormat("Setup Quality: %s | Factors: %d | R:R: %.1f | Max Scaling: %.1fx",
+                                   EnumToString(quality),
+                                   riskMatrix[i].minFactors,
+                                   riskMatrix[i].minRiskReward,
+                                   riskMatrix[i].maxScaling));
+         break;
+      }
    }
    
    // Validar configuração final
@@ -1529,6 +1597,35 @@ double CRiskManager::GetScalingTier(SETUP_QUALITY quality, double requiredFactor
 }
 
 //+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: CalculateRiskBasedScaling                   |
+//| Limita o escalonamento baseado na qualidade do setup            |
+//+------------------------------------------------------------------+
+double CRiskManager::CalculateRiskBasedScaling(ENUM_SETUP_QUALITY quality, double baseScaling)
+{
+   for(int i=0;i<ArraySize(riskMatrix);i++)
+   {
+      if(riskMatrix[i].quality==quality)
+         return(MathMin(baseScaling, riskMatrix[i].maxScaling));
+   }
+   return(1.0);
+}
+
+//+------------------------------------------------------------------+
+//| ✅ FUNÇÃO AUXILIAR: ValidateSetupForScaling                     |
+//| Impede escalonamento inadequado para setups fracos              |
+//+------------------------------------------------------------------+
+bool CRiskManager::ValidateSetupForScaling(ENUM_SETUP_QUALITY quality, double requestedScaling)
+{
+   if(quality==SETUP_C && requestedScaling>1.0)
+   {
+      if(m_logger!=NULL)
+         m_logger.Warning("Setup C cannot be scaled beyond 1x");
+      return(false);
+   }
+   return(true);
+}
+
+//+------------------------------------------------------------------+
 //| ✅ FUNÇÃO: GetPartialReport                                    |
 //| Gera relatório de parciais para um símbolo                      |
 //+------------------------------------------------------------------+
@@ -1987,11 +2084,12 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       if(numPartials > 0) {
          // ✅ USAR SISTEMA UNIVERSAL COM VOLUME ADEQUADO
          AdaptivePartialConfig partialConfig = CalculateUniversalPartials(
-            symbol, 
+            symbol,
             baseVolume,  // Volume já ajustado para parciais
             percentages,
             levels,
-            numPartials
+            numPartials,
+            signal.quality
          );
          
          // Aplicar configuração calculada
