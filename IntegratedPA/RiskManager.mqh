@@ -185,15 +185,15 @@ CRiskManager::CRiskManager(double defaultRiskPercentage = 1.0, double maxTotalRi
    for(int i=0;i<4;i++) m_qualityScaling[SETUP_A_PLUS].tiers[i] = tiersAPlus[i];
    m_qualityScaling[SETUP_A_PLUS].count = 4;
 
-   double tiersA[3] = {2.0, 3.0, 4.0};
-   for(int i=0;i<3;i++) m_qualityScaling[SETUP_A].tiers[i] = tiersA[i];
-   m_qualityScaling[SETUP_A].count = 3;
+   double tiersA[2] = {2.0, 3.0};
+   for(int i=0;i<2;i++) m_qualityScaling[SETUP_A].tiers[i] = tiersA[i];
+   m_qualityScaling[SETUP_A].count = 2;
 
-   double tiersB[2] = {2.0, 3.0};
-   for(int i=0;i<2;i++) m_qualityScaling[SETUP_B].tiers[i] = tiersB[i];
-   m_qualityScaling[SETUP_B].count = 2;
+   double tiersB[1] = {2.0};
+   for(int i=0;i<1;i++) m_qualityScaling[SETUP_B].tiers[i] = tiersB[i];
+   m_qualityScaling[SETUP_B].count = 1;
 
-   m_qualityScaling[SETUP_C].tiers[0] = 2.0;
+   m_qualityScaling[SETUP_C].tiers[0] = 1.0;
    m_qualityScaling[SETUP_C].count = 1;
 }
 
@@ -1413,17 +1413,31 @@ void CRiskManager::ResetPartialMetrics()
 double CRiskManager::GetScalingTier(SETUP_QUALITY quality, double requiredFactor, double maxFactor)
 {
    int qIndex = (int)quality;
-   if (qIndex < 0 || qIndex >= ArraySize(m_qualityScaling))
+   if(qIndex < 0 || qIndex >= ArraySize(m_qualityScaling))
       qIndex = 0; // SETUP_INVALID
 
-   for (int i = 0; i < m_qualityScaling[qIndex].count; i++)
+   // Limites baseados na qualidade do setup
+   double qualityLimit = 1.0;
+   switch(quality)
+   {
+      case SETUP_A_PLUS: qualityLimit = 5.0; break;
+      case SETUP_A:      qualityLimit = 3.0; break;
+      case SETUP_B:      qualityLimit = 2.0; break;
+      case SETUP_C:      qualityLimit = 1.0; break;
+      default:           qualityLimit = 1.0; break;
+   }
+
+   // Aplicar limite efetivo
+   double effectiveMax = MathMin(maxFactor, qualityLimit);
+
+   for(int i = 0; i < m_qualityScaling[qIndex].count; i++)
    {
       double tier = m_qualityScaling[qIndex].tiers[i];
-      if (tier >= requiredFactor && tier <= maxFactor)
+      if(tier <= effectiveMax && tier >= requiredFactor)
          return tier;
    }
 
-   return 0.0; // Nenhum tier adequado encontrado
+   return (effectiveMax >= requiredFactor) ? effectiveMax : 0.0;
 }
 
 //+------------------------------------------------------------------+
@@ -1825,6 +1839,18 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
                if(m_logger != NULL) {
                   m_logger.Info(StringFormat("✅ VOLUME ESCALADO para %s: %.2f → %.2f lotes (tier %.1fx)",
                                            symbol, originalVolume, baseVolume, tier));
+
+                  double qualityLimit = 1.0;
+                  switch(signal.quality) {
+                     case SETUP_A_PLUS: qualityLimit = 5.0; break;
+                     case SETUP_A:      qualityLimit = 3.0; break;
+                     case SETUP_B:      qualityLimit = 2.0; break;
+                     case SETUP_C:      qualityLimit = 1.0; break;
+                     default:           qualityLimit = 1.0; break;
+                  }
+
+                  m_logger.Info(StringFormat("Setup Quality: %s | Max Allowed: %.1fx | Selected Tier: %.1fx | Reason: Quality-based limit",
+                                           EnumToString(signal.quality), qualityLimit, tier));
                }
             } else {
                // ✅ ESTRATÉGIA 2: Escalonamento limitado
