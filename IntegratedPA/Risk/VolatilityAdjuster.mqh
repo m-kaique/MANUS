@@ -6,8 +6,8 @@
 #define VOLATILITYADJUSTER_MQH
 #property strict
 
-#include "Logging/Logger.mqh"
-#include "Indicators/IndicatorHandlePool.mqh"
+#include "../Logging/Logger.mqh"
+#include "../Indicators/IndicatorHandlePool.mqh"
 
 //+------------------------------------------------------------------+
 //| Simple thread lock using atomic operations                       |

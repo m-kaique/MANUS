@@ -9,7 +9,7 @@
 #property strict
 
 #include "Structures.mqh"
-#include "Logging/Logger.mqh"
+#include "../Logging/Logger.mqh"
 
 //+------------------------------------------------------------------+
 //| Estrutura para armazenar estatísticas por qualidade de setup     |

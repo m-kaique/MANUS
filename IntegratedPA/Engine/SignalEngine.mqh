@@ -16,7 +16,7 @@
 #include "../Risk/CircuitBreaker.mqh"
 
 // Strategies
-#include "strategies/SpikeAndChannel.mqh"
+#include "../strategies/SpikeAndChannel.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para geração de sinais de trading                         |

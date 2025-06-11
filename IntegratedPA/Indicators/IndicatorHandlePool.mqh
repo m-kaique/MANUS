@@ -10,7 +10,7 @@
 
 #include "IndicatorHandle.mqh"
 #include "../Logging/Logger.mqh"
-#include "../Structures.mqh"
+#include "../Core/Structures.mqh"
 
 //+------------------------------------------------------------------+
 //| Classe para gerenciamento centralizado de handles de indicadores |
