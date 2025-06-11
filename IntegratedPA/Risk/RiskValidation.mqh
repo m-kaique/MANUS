@@ -88,4 +88,59 @@ bool CRiskManager::ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double 
 
    return true;
 }
+
+//+------------------------------------------------------------------+
+//| Helper functions for additional volume safety checks             |
+//+------------------------------------------------------------------+
+
+// Calculate average tick volume for the current timeframe
+double GetAverageVolume(string symbol, int periods)
+{
+   long volumes[];
+   ArraySetAsSeries(volumes, true);
+
+   if (CopyTickVolume(symbol, PERIOD_CURRENT, 1, periods, volumes) <= 0)
+      return 0.0;
+
+   double sum = 0.0;
+   for (int i = 0; i < periods; i++)
+      sum += (double)volumes[i];
+
+   return sum / periods;
+}
+
+// Return the maximum volume allowed for a symbol based on broker limits
+double GetMaxVolumeBySymbol(string symbol, double originalVolume)
+{
+   double symbolMax = SymbolInfoDouble(symbol, SYMBOL_VOLUME_MAX);
+   if(symbolMax <= 0)
+      symbolMax = originalVolume * 100.0;
+
+   double defaultLimit = originalVolume * 100.0;
+   return MathMin(symbolMax, defaultLimit);
+}
+
+// Identify if the proposed volume deviates strongly from recent averages
+bool IsVolumeOutlier(double proposedVolume, string symbol)
+{
+   double avgVol = GetAverageVolume(symbol, 20);
+   if(avgVol <= 0)
+      return false;
+
+   return (proposedVolume > avgVol * 3.0);
+}
+
+// Validate if position value stays below 10% of account equity
+bool ValidateVolumeByEquity(double volume, string symbol)
+{
+   double price        = SymbolInfoDouble(symbol, SYMBOL_ASK);
+   double contractSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   if(price <= 0 || contractSize <= 0)
+      return true;
+
+   double positionValue = volume * contractSize * price;
+   double equity        = AccountInfoDouble(ACCOUNT_EQUITY);
+
+   return (positionValue <= equity * 0.10);
+}
 #endif // RISK_VALIDATION_MQH
