@@ -30,13 +30,25 @@ input double VOLUME_THRESHOLD = 120;                  // % mínimo volume para M
 input group "=== SPIKE AND CHANNEL ==="
 input int    SPIKE_MIN_BARS = 3;                      // Mínimo de barras para spike
 input int    SPIKE_MAX_BARS = 5;                      // Máximo de barras para spike
-input double SPIKE_MIN_BODY_RATIO = 0.7;              // Razão mínima corpo/total
-input double SPIKE_MAX_OVERLAP = 15.0;                // Máxima sobreposição entre barras (%)
+input double SPIKE_MIN_BODY_RATIO = 1.5;              // Razão mínima corpo/total
+input double SPIKE_MAX_OVERLAP = 10.0;                // Máxima sobreposição entre barras (%)
+input double SPIKE_VOL_MULTIPLIER = 1.3;              // Multiplicador de volume no spike
 
 input double CHANNEL_MIN_PULLBACK = 0.3;              // Mínimo pullback no canal
 input double CHANNEL_MAX_PULLBACK = 0.8;              // Máximo pullback no canal
 input int    CHANNEL_MIN_BARS = 5;                    // Mínimo de barras no canal
 input int    CHANNEL_MAX_BARS = 30;                   // Máximo de barras no canal
+
+input double CHANNEL_SLOPE_MIN = 0.0;                // Inclinação mínima da linha de tendência
+input double PULLBACK_DEPTH_MAX_PCT = 30.0;          // Profundidade máxima do pullback (%)
+input int    PULLBACK_BARS_MIN = 1;                  // Mínimo de barras no pullback
+input double CHANNEL_VOL_RATIO = 0.6;                // Razão de volume do canal
+input string ENTRY_MODE_SPIKE = "pullbackMin,strongClose";   // Modos de entrada spike
+input string ENTRY_MODE_CHANNEL = "pullbackTrendline,pullbackFail"; // Modos de entrada canal
+input int    MIN_HESITATION_BARS = 1;                // Mínimo de barras de hesitação
+input bool   CHANNEL_BREAK_FAIL = true;              // Operar falha no rompimento do canal
+input bool   WEDGE_TERMINAL = true;                  // Considerar wedge terminal
+input bool   FAILED_CONTINUATION = true;             // Considerar falha de continuação
 
 //+------------------------------------------------------------------+
 //| Fibonacci Levels                                                 |
@@ -159,10 +171,10 @@ input int MAX_TRADES_HISTORY = 1000;                  // Máximo de trades no hi
 //| WIN (Mini Índice) - Valores em pontos                           |
 //+------------------------------------------------------------------+
 input group "=== WIN (Mini Índice) ==="
-input int WIN_SPIKE_MAX_STOP = 1200;                  // Stop máximo durante spike
-input int WIN_CHANNEL_MAX_STOP = 1000;                // Stop máximo durante canal
-input int WIN_FIRST_TARGET = 800;                     // Primeiro alvo
-input int WIN_SECOND_TARGET = 2000;                   // Segundo alvo
+input int WIN_SPIKE_MAX_STOP = 200;                   // Stop máximo durante spike
+input int WIN_CHANNEL_MAX_STOP = 150;                 // Stop máximo durante canal
+input int WIN_FIRST_TARGET = 500;                     // Primeiro alvo
+input int WIN_SECOND_TARGET = 1000;                   // Segundo alvo
 input int WIN_TRAILING_STOP = 400;                    // Trailing stop
 input int WIN_MIN_STOP_DISTANCE = 100;                // Distância mínima do stop
 input int WIN_BREAKEVEN_TRIGGER = 400;                // Move SL para BE após este lucro
@@ -173,22 +185,22 @@ input int WIN_MAX_HOLDING_BARS = 240;                 // Máximo 12h em M3 (240 
 //| WDO (Mini Dólar) - Valores em pontos                            |
 //+------------------------------------------------------------------+
 input group "=== WDO (Mini Dólar) ==="
-input int WDO_SPIKE_MAX_STOP = 15;                    // Stop máximo durante spike
-input int WDO_CHANNEL_MAX_STOP = 12;                  // Stop máximo durante canal
-input int WDO_FIRST_TARGET = 25;                      // Primeiro alvo
-input int WDO_SECOND_TARGET = 45;                     // Segundo alvo
-input int WDO_TRAILING_STOP = 18;                     // Trailing stop
+input int WDO_SPIKE_MAX_STOP = 7;                     // Stop máximo durante spike
+input int WDO_CHANNEL_MAX_STOP = 5;                   // Stop máximo durante canal
+input int WDO_FIRST_TARGET = 15;                      // Primeiro alvo
+input int WDO_SECOND_TARGET = 30;                     // Segundo alvo
+input int WDO_TRAILING_STOP = 15;                     // Trailing stop
 input int WDO_MIN_STOP_DISTANCE = 10;                 // Distância mínima do stop
 
 //+------------------------------------------------------------------+
 //| BTC (Bitcoin Futuros) - Valores em USD                          |
 //+------------------------------------------------------------------+
 input group "=== BTC (Bitcoin Futuros) ==="
-input int BTC_SPIKE_MAX_STOP = 1200;                  // Stop máximo durante spike
-input int BTC_CHANNEL_MAX_STOP = 800;                 // Stop máximo durante canal
-input int BTC_FIRST_TARGET = 2000;                    // Primeiro alvo
-input int BTC_SECOND_TARGET = 4000;                   // Segundo alvo
-input int BTC_TRAILING_STOP = 1000;                   // Trailing stop
+input int BTC_SPIKE_MAX_STOP = 700;                   // Stop máximo durante spike
+input int BTC_CHANNEL_MAX_STOP = 500;                 // Stop máximo durante canal
+input int BTC_FIRST_TARGET = 1500;                    // Primeiro alvo
+input int BTC_SECOND_TARGET = 3000;                   // Segundo alvo
+input int BTC_TRAILING_STOP = 800;                    // Trailing stop
 input int BTC_MIN_STOP_DISTANCE = 600;                // Distância mínima do stop
 
 //+------------------------------------------------------------------+
@@ -214,7 +226,7 @@ input double REVERSAL_STOP_MULTIPLIER = 1.3;          // 30% maior em reversão
 //+------------------------------------------------------------------+
 input group "=== TRAILING STOP MELHORADO ==="
 input int    TRAILING_MIN_PROFIT_POINTS = 50;         // Mínimo lucro antes de ativar trailing
-input double TRAILING_ACTIVATION_RR = 0.3;            // Ativar trailing após 0.3:1 R:R
+input double TRAILING_ACTIVATION_RR = 2.0;            // Ativar trailing após 2.0:1 R:R
 
 //+------------------------------------------------------------------+
 //| CONSTANTES NÃO CONFIGURÁVEIS                                     |

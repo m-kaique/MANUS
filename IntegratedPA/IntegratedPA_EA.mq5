@@ -45,6 +45,7 @@ input ENUM_TIMEFRAMES MainTimeframe = PERIOD_M3;               // Timeframe Prin
 input string RiskSettings = "=== Configurações de Risco ==="; // Configurações de Risco
 input double RiskPerTrade = 1.0;                              // Risco por operação (%)
 input double MaxTotalRisk = 5.0;                              // Risco máximo total (%)
+input double PartialTakeProfit = 0.5;                         // Percentual da posição para realizar parcial
 
 // Configurações de Estratégia
 input string StrategySettings = "=== Configurações de Estratégia ==="; // Configurações de Estratégia
