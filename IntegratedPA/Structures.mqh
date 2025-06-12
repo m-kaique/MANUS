@@ -369,6 +369,7 @@ struct LastSignalInfo
    ENUM_ORDER_TYPE direction;
    double entryPrice;
    bool isActive;
+   datetime lastTradeTime;
 };
 
 // Estrutura para armazenar parâmetros dos ativos

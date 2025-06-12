@@ -46,6 +46,7 @@ input ENUM_TIMEFRAMES MainTimeframe = PERIOD_M3;               // Timeframe Prin
 input string RiskSettings = "=== Configurações de Risco ==="; // Configurações de Risco
 input double RiskPerTrade = 1.0;                              // Risco por operação (%)
 input double MaxTotalRisk = 5.0;                              // Risco máximo total (%)
+input int    MaxTradesPerSymbol = 1;                          // Limite de trades simultâneos por símbolo
 
 // Configurações de Estratégia
 input string StrategySettings = "=== Configurações de Estratégia ==="; // Configurações de Estratégia
@@ -53,6 +54,10 @@ input bool EnableTrendStrategies = true;                               // Habili
 input bool EnableRangeStrategies = true;                               // Habilitar Estratégias de Range
 input bool EnableReversalStrategies = true;                            // Habilitar Estratégias de Reversão
 input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualidade Mínima do Setup
+input double MinConfluenceScore = 0.5;                                 // Score mínimo de confluência
+input int    TradeCooldownSeconds = 0;                                 // Tempo mínimo entre trades por símbolo
+input bool   EnableTrailingWithoutBreakeven = false;                   // Trailing sem breakeven
+input bool   EnablePartialsWithoutBreakeven = false;                   // Parciais sem breakeven
 
 // Configurações de Horário de Trading
 input string SessionSettings = "=== Horário de Trading ===";
@@ -149,6 +154,7 @@ void StoreLastSignal(string symbol, Signal &signal)
       g_lastSignals[index].direction = signal.direction;
       g_lastSignals[index].entryPrice = signal.entryPrice;
       g_lastSignals[index].isActive = true;
+      g_lastSignals[index].lastTradeTime = TimeCurrent();
    }
 }
 
@@ -171,6 +177,38 @@ bool HasOpenPosition(string symbol)
       }
    }
    return false;
+}
+
+// Contar trades abertos por símbolo e direção
+int CountOpenTrades(string symbol, ENUM_ORDER_TYPE direction)
+{
+   int count = 0;
+   for (int i = 0; i < PositionsTotal(); i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket > 0 && PositionSelectByTicket(ticket))
+      {
+         if (PositionGetString(POSITION_SYMBOL) == symbol)
+         {
+            ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+            if ((direction == ORDER_TYPE_BUY  && posType == POSITION_TYPE_BUY) ||
+                (direction == ORDER_TYPE_SELL && posType == POSITION_TYPE_SELL))
+               count++;
+         }
+      }
+   }
+   return count;
+}
+
+// Obter último horário de trade executado para o símbolo
+datetime GetLastTradeTime(string symbol)
+{
+   for (int i = 0; i < g_lastSignalCount; i++)
+   {
+      if (g_lastSignals[i].symbol == symbol)
+         return g_lastSignals[i].lastTradeTime;
+   }
+   return 0;
 }
 //+------------------------------------------------------------------+
 //| Função para verificar se o histórico está disponível             |
@@ -568,6 +606,8 @@ int OnInit()
 
    // Configurar o executor de trades
    g_tradeExecutor.SetTradeAllowed(EnableTrading);
+   g_tradeExecutor.SetEnableTrailingWithoutBreakeven(EnableTrailingWithoutBreakeven);
+   g_tradeExecutor.SetEnablePartialsWithoutBreakeven(EnablePartialsWithoutBreakeven);
    //
 
    // Inicializar array de últimos tempos de barra
@@ -782,6 +822,13 @@ void OnTick()
       Signal signal = GenerateSignalByPhase(symbol, phase);
       if (signal.id > 0 && signal.quality != SETUP_INVALID)
       {
+         ConfluenceFactors cf = g_setupClassifier.AnalyzeConfluence(symbol, MainTimeframe, signal);
+         if (cf.confluenceScore < MinConfluenceScore)
+         {
+            g_logger.Debug(StringFormat("Confluência insuficiente %.2f para %s", cf.confluenceScore, symbol));
+            continue;
+         }
+
          // Verificar duplicatas
          if (IsDuplicateSignal(symbol, signal))
          {
@@ -824,6 +871,18 @@ Signal GenerateSignalByPhase(string symbol, MARKET_PHASE phase)
 //+------------------------------------------------------------------+
 bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase)
 {
+   if (CountOpenTrades(symbol, signal.direction) >= MaxTradesPerSymbol)
+   {
+      g_logger.Info(StringFormat("Limite de trades atingido para %s", symbol));
+      return false;
+   }
+
+   if (TimeCurrent() - GetLastTradeTime(symbol) < TradeCooldownSeconds)
+   {
+      g_logger.Debug(StringFormat("Cooldown ativo para %s", symbol));
+      return false;
+   }
+
    // Verificar se as condições de entrada estão ativas AGORA
    MqlTick lastTick;
    if (!SymbolInfoTick(symbol, lastTick))
@@ -973,6 +1032,19 @@ void ProcessPendingSignals()
       if (HasOpenPosition(g_pendingSignals[i].signal.symbol))
       {
          g_pendingSignals[i].isActive = false;
+         continue;
+      }
+
+      if (CountOpenTrades(g_pendingSignals[i].signal.symbol, g_pendingSignals[i].signal.direction) >= MaxTradesPerSymbol)
+      {
+         g_logger.Info(StringFormat("Limite de trades atingido para %s (pendente)", g_pendingSignals[i].signal.symbol));
+         g_pendingSignals[i].isActive = false;
+         continue;
+      }
+
+      if (TimeCurrent() - GetLastTradeTime(g_pendingSignals[i].signal.symbol) < TradeCooldownSeconds)
+      {
+         g_logger.Debug(StringFormat("Cooldown ativo para %s (pendente)", g_pendingSignals[i].signal.symbol));
          continue;
       }
 

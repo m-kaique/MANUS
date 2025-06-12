@@ -142,6 +142,7 @@ public:
    // ✅ MÉTODOS PARA GESTÃO DE POSIÇÕES ORIGINAIS MANTIDOS
    bool ShouldTakePartial(string symbol, ulong ticket, double currentPrice, double entryPrice, double stopLoss);
    double GetPartialVolume(string symbol, ulong ticket, double currentRR);
+   double GetPositionRiskPercent(string symbol, ulong ticket);
 
    // ✅ MÉTODOS DE ACESSO ORIGINAIS MANTIDOS
    double GetCurrentTotalRisk();
@@ -1790,6 +1791,26 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
          m_logger.Info(StringFormat("Ajuste de volume por volatilidade [%s] (ATR): fator %.2f → baseVolume ajustado %.3f", symbol, ajusteVol, baseVolume));
    }
 
+   // Verificar risco total após incluir esta posição
+   double stopDistance = MathAbs(request.price - request.stopLoss);
+   double tickValue = GetSymbolTickValue(symbol);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double riskValue = (stopDistance / tickSize) * tickValue * baseVolume;
+   if (m_accountBalance <= 0)
+      UpdateAccountInfo();
+   double newRisk = (riskValue / m_accountBalance) * 100.0;
+   double currentRisk = GetCurrentTotalRisk();
+   if(m_logger != NULL)
+      m_logger.Debug(StringFormat("currentRisk=%.2f newRisk=%.2f maxRisk=%.2f",
+                                 currentRisk, newRisk, m_maxTotalRisk));
+   if (currentRisk + newRisk > m_maxTotalRisk)
+   {
+      if (m_logger != NULL)
+         m_logger.Warning(StringFormat("Risco total %.2f%% excede limite %.2f%% ao adicionar operação em %s", currentRisk + newRisk, m_maxTotalRisk, symbol));
+      request.volume = 0;
+      return request;
+   }
+
    // ✅ NOVA LÓGICA: GARANTIR VOLUME ADEQUADO PARA PARCIAIS
    if (index >= 0 && m_symbolParams[index].usePartials)
    {
@@ -2039,10 +2060,47 @@ double CRiskManager::GetPartialVolume(string symbol, ulong ticket, double curren
    return 0;
 }
 
+double CRiskManager::GetPositionRiskPercent(string symbol, ulong ticket)
+{
+   if (!PositionSelectByTicket(ticket))
+      return 0.0;
+
+   double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   double stop = PositionGetDouble(POSITION_SL);
+   double volume = PositionGetDouble(POSITION_VOLUME);
+
+   if (entry <= 0 || stop <= 0 || volume <= 0)
+      return 0.0;
+
+   double tickValue = GetSymbolTickValue(symbol);
+   double tickSize = SymbolInfoDouble(symbol, SYMBOL_TRADE_TICK_SIZE);
+   double riskValue = MathAbs(entry - stop) / tickSize * tickValue * volume;
+
+   if (m_accountBalance <= 0)
+      UpdateAccountInfo();
+
+   if (m_accountBalance <= 0)
+      return 0.0;
+
+   return (riskValue / m_accountBalance) * 100.0;
+}
+
 double CRiskManager::GetCurrentTotalRisk()
 {
-   // Implementação original mantida
-   return 0; // Placeholder
+   UpdateAccountInfo();
+
+   double total = 0.0;
+   int totalPositions = PositionsTotal();
+   for (int i = 0; i < totalPositions; i++)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if (ticket > 0 && PositionSelectByTicket(ticket))
+      {
+         string sym = PositionGetString(POSITION_SYMBOL);
+         total += GetPositionRiskPercent(sym, ticket);
+      }
+   }
+   return total;
 }
 
 //+------------------------------------------------------------------+
