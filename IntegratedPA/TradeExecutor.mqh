@@ -16,6 +16,7 @@
 #include "CircuitBreaker.mqh"
 #include "Constants.mqh"
 #include "MarketContext.mqh"
+#include "TradingControl.mqh"
 
 // Constantes de erro definidas como macros
 #define TRADE_ERROR_NO_ERROR 0
@@ -276,6 +277,13 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       return false;
    }
 
+   // impede novas entradas quando bloqueadas pelo TimeManager
+   if(!TradingControl::AllowEntry())
+   {
+      Print("[TradeExecutor] Entrada bloqueada por TimeManager");
+      return false;
+   }
+
    // Verificar se trading está permitido
    if (!m_tradeAllowed)
    {
@@ -497,6 +505,9 @@ bool CTradeExecutor::ModifyPosition(ulong ticket, double stopLoss, double takePr
 //+------------------------------------------------------------------+
 bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
 {
+   if(!TradingControl::AllowExit())
+      return false;
+
    // Validar e selecionar posição
    if (!PositionSelectByTicket(ticket))
    {

@@ -557,39 +557,10 @@ int OnInit()
       g_logger.Error("Erro ao criar TimeManager");
       return (INIT_FAILED);
    }
-
-   TradingHours defHours;
-   g_timeManager.ParseTimeString(DefaultStartTime, defHours.startHour, defHours.startMinute);
-   g_timeManager.ParseTimeString(DefaultEndTime, defHours.endHour, defHours.endMinute);
-   g_timeManager.ParseTimeString(ForceCloseTime, defHours.closeHour, defHours.closeMinute);
-
-   g_timeManager.Initialize(g_logger, g_tradeExecutor, defHours);
-   g_timeManager.Enable(EnableTradingHours);
-
-   for (int i = 0; i < ArraySize(g_assets); i++)
+   if(!g_timeManager.Init())
    {
-      TradingHours th = defHours;
-      if (g_assets[i].symbol == "BIT$D" && BTC_StartTime != "" && BTC_EndTime != "")
-      {
-         g_timeManager.ParseTimeString(BTC_StartTime, th.startHour, th.startMinute);
-         g_timeManager.ParseTimeString(BTC_EndTime, th.endHour, th.endMinute);
-         g_assets[i].useCustomTradingHours = true;
-      }
-      else if (g_assets[i].symbol == "WDO$D" && WDO_StartTime != "" && WDO_EndTime != "")
-      {
-         g_timeManager.ParseTimeString(WDO_StartTime, th.startHour, th.startMinute);
-         g_timeManager.ParseTimeString(WDO_EndTime, th.endHour, th.endMinute);
-         g_assets[i].useCustomTradingHours = true;
-      }
-      else if (g_assets[i].symbol == "WINM25" && WIN_StartTime != "" && WIN_EndTime != "")
-      {
-         g_timeManager.ParseTimeString(WIN_StartTime, th.startHour, th.startMinute);
-         g_timeManager.ParseTimeString(WIN_EndTime, th.endHour, th.endMinute);
-         g_assets[i].useCustomTradingHours = true;
-      }
-
-      g_assets[i].tradingHours = th;
-      g_timeManager.ConfigureSymbol(g_assets[i].symbol, th);
+      g_logger.Error("Erro ao inicializar TimeManager");
+      return (INIT_FAILED);
    }
 
    // Configurar o executor de trades
@@ -741,8 +712,7 @@ void OnTick()
 
    if (g_timeManager != NULL)
    {
-      g_timeManager.UpdatePermissions();
-      g_timeManager.CheckForcedClose();
+      g_timeManager.Pulse();
    }
 
    // 1. GERENCIAMENTO CONTÍNUO DE POSIÇÕES (A CADA TICK)
@@ -853,12 +823,6 @@ Signal GenerateSignalByPhase(string symbol, MARKET_PHASE phase)
 //+------------------------------------------------------------------+
 bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase)
 {
-   if (g_timeManager != NULL && !g_timeManager.IsWithinTradingHours(symbol))
-   {
-      if (g_logger != NULL)
-         g_logger.Info("Horário fora da janela de negociação para " + symbol);
-      return false;
-   }
    // Verificar se as condições de entrada estão ativas AGORA
    MqlTick lastTick;
    if (!SymbolInfoTick(symbol, lastTick))
@@ -1011,12 +975,6 @@ void ProcessPendingSignals()
          continue;
       }
 
-      if (g_timeManager != NULL && !g_timeManager.IsWithinTradingHours(g_pendingSignals[i].signal.symbol))
-      {
-         if (g_logger != NULL)
-            g_logger.Info("Horário fora da janela para pendente " + g_pendingSignals[i].signal.symbol);
-         continue;
-      }
 
       // Verificar condições de entrada
       if (CheckSignalEntryConditions(g_pendingSignals[i].signal))
@@ -1194,8 +1152,7 @@ void OnTimer()
 
    if (g_timeManager != NULL)
    {
-      g_timeManager.UpdatePermissions();
-      g_timeManager.CheckForcedClose();
+      g_timeManager.Pulse();
    }
 
    // Limpar sinais pendentes expirados
