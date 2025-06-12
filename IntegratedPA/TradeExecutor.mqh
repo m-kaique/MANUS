@@ -171,6 +171,7 @@ public:
    bool ModifyPosition(ulong ticket, double stopLoss, double takeProfit);
    bool ClosePosition(ulong ticket, double volume = 0.0);
    bool CloseAllPositions(string symbol = "");
+   bool CancelAllPendingOrders(string symbol = "");
 
    // Métodos de trailing stop
    bool ApplyTrailingStop(ulong ticket, double points);
@@ -643,6 +644,78 @@ bool CTradeExecutor::CloseAllPositions(string symbol = "")
       m_logger.Warning(StringFormat("Nenhuma posição fechada de %d posições abertas", totalPositions));
       return false;
    }
+}
+
+//+------------------------------------------------------------------+
+//| Cancelamento de todas as ordens pendentes                         |
+//+------------------------------------------------------------------+
+bool CTradeExecutor::CancelAllPendingOrders(string symbol = "")
+{
+   if (!m_tradeAllowed)
+   {
+      m_lastError = -1;
+      m_lastErrorDesc = "Trading não está habilitado";
+      m_logger.Warning(m_lastErrorDesc);
+      return false;
+   }
+
+   if (symbol == "")
+      m_logger.Info("Cancelando todas as ordens pendentes");
+   else
+      m_logger.Info(StringFormat("Cancelando ordens pendentes de %s", symbol));
+
+   int totalOrders   = OrdersTotal();
+   int canceledCount = 0;
+
+   for (int i = totalOrders - 1; i >= 0; i--)
+   {
+      ulong ticket = OrderGetTicket(i);
+
+      if (ticket <= 0)
+      {
+         m_logger.Warning(StringFormat("Falha ao obter ticket da ordem %d", i));
+         continue;
+      }
+
+      string ordSymbol = OrderGetString(ORDER_SYMBOL);
+      if (symbol != "" && ordSymbol != symbol)
+         continue;
+
+      if (OrderGetInteger(ORDER_MAGIC) != MAGIC_NUMBER)
+         continue;
+
+      ENUM_ORDER_TYPE type = (ENUM_ORDER_TYPE)OrderGetInteger(ORDER_TYPE);
+      if (type == ORDER_TYPE_BUY_LIMIT || type == ORDER_TYPE_SELL_LIMIT ||
+          type == ORDER_TYPE_BUY_STOP || type == ORDER_TYPE_SELL_STOP ||
+          type == ORDER_TYPE_BUY_STOP_LIMIT || type == ORDER_TYPE_SELL_STOP_LIMIT)
+      {
+         if (m_trade.OrderDelete(ticket))
+         {
+            canceledCount++;
+            m_logger.Info(StringFormat("Ordem #%d cancelada", ticket));
+         }
+         else
+         {
+            m_lastError     = (int)m_trade.ResultRetcode();
+            m_lastErrorDesc = "Erro ao cancelar ordem";
+            m_logger.Error(StringFormat("Falha ao cancelar ordem #%d: %d", ticket, m_lastError));
+         }
+      }
+   }
+
+   if (canceledCount > 0)
+   {
+      m_logger.Info(StringFormat("%d ordens pendentes canceladas", canceledCount));
+      return true;
+   }
+   else if (totalOrders == 0)
+   {
+      m_logger.Info("Nenhuma ordem pendente para cancelar");
+      return true;
+   }
+
+   m_logger.Warning("Nenhuma ordem pendente cancelada");
+   return false;
 }
 
 //+------------------------------------------------------------------+
