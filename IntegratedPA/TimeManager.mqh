@@ -12,11 +12,26 @@ input int      InpCutoffBufferMin = 2;        // buffer de minutos (bloqueia ent
 class CTimeManager
 {
 private:
-   datetime  m_cutoff;        // horário hard-cut
+   datetime  m_cutoff;        // horário hard-cut (data/hora)
+   datetime  m_currentDay;    // dia para o qual m_cutoff foi calculado
    int       m_bufferMin;     // minutos de buffer
    bool      m_entryBlocked;  // se entradas já bloqueadas
    bool      m_closeExecuted; // se close forçado já executado
    CTrade    m_trade;         // handler de trade MT5
+
+   // Atualiza m_cutoff para um determinado dia
+   void UpdateCutoff(datetime day)
+   {
+      int h = (int)StringToInteger(StringSubstr(InpSessionCutoff,0,2));
+      int m = (int)StringToInteger(StringSubstr(InpSessionCutoff,3,2));
+      MqlDateTime tm;
+      TimeToStruct(day, tm);
+      tm.hour = h;
+      tm.min  = m;
+      tm.sec  = 0;
+      m_cutoff = StructToTime(tm);
+      m_currentDay = day;
+   }
 
 public:
    // --------------------------------------------------------------
@@ -25,17 +40,10 @@ public:
       m_bufferMin     = InpCutoffBufferMin;
       m_entryBlocked  = false;
       m_closeExecuted = false;
-
-      // converte HH:MM para datetime no dia corrente
-      int h = (int)StringToInteger(StringSubstr(InpSessionCutoff,0,2));
-      int m = (int)StringToInteger(StringSubstr(InpSessionCutoff,3,2));
-      datetime now  = TimeCurrent();
-      MqlDateTime tm;
-      TimeToStruct(now, tm);
-      tm.hour = h;
-      tm.min  = m;
-      tm.sec  = 0;
-      m_cutoff = StructToTime(tm);
+      m_currentDay = DateCurrent();
+      UpdateCutoff(m_currentDay);
+      TradingControl::EnableEntry();
+      TradingControl::EnableExit();
       return true;
    }
 
@@ -43,6 +51,17 @@ public:
    void Pulse()
    {
       datetime now = TimeCurrent();
+      datetime today = DateCurrent();
+
+      // Recalcula cutoff e reseta flags se o dia mudou
+      if(today != m_currentDay)
+      {
+         m_entryBlocked  = false;
+         m_closeExecuted = false;
+         TradingControl::EnableEntry();
+         TradingControl::EnableExit();
+         UpdateCutoff(today);
+      }
 
       // 1) Pré-fechamento – bloquear entradas
       if(!m_entryBlocked && now >= (m_cutoff - m_bufferMin*60))
