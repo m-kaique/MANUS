@@ -47,6 +47,8 @@ private:
    bool m_tradeAllowed;
    int m_maxRetries;
    int m_retryDelay;
+   bool m_enableTrailingWithoutBreakeven;
+   bool m_enablePartialsWithoutBreakeven;
 
    // Estado
    int m_lastError;
@@ -191,6 +193,8 @@ public:
    void SetTradeAllowed(bool allowed) { m_tradeAllowed = allowed; }
    void SetMaxRetries(int retries) { m_maxRetries = retries; }
    void SetRetryDelay(int delay) { m_retryDelay = delay; }
+   void SetEnableTrailingWithoutBreakeven(bool v) { m_enableTrailingWithoutBreakeven = v; }
+   void SetEnablePartialsWithoutBreakeven(bool v) { m_enablePartialsWithoutBreakeven = v; }
 
    // Métodos de acesso
    int GetLastError() const { return m_lastError; }
@@ -212,6 +216,8 @@ CTradeExecutor::CTradeExecutor()
    m_tradeAllowed = true;
    m_maxRetries = 3;
    m_retryDelay = 1000; // 1 segundo
+   m_enableTrailingWithoutBreakeven = false;
+   m_enablePartialsWithoutBreakeven = false;
    m_lastError = 0;
    m_lastErrorDesc = "";
 }
@@ -1680,19 +1686,34 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
       return false;
    }
 
-   // ✅ CORREÇÃO CRÍTICA: Verificar se breakeven foi acionado PRIMEIRO
-   if (!IsBreakevenTriggered(ticket))
+   string symbol = PositionGetString(POSITION_SYMBOL);
+   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+   double profitPoints = 0;
+   if (posType == POSITION_TYPE_BUY)
+      profitPoints = (currentPrice - entryPrice) / point;
+   else
+      profitPoints = (entryPrice - currentPrice) / point;
+
+   bool breakevenTriggered = IsBreakevenTriggered(ticket);
+
+   if (!breakevenTriggered)
    {
-      if (m_logger != NULL)
+      if (!m_enableTrailingWithoutBreakeven || profitPoints < TRAILING_MIN_PROFIT_POINTS)
       {
-         static datetime lastBreakevenLog = 0;
-         if (TimeCurrent() - lastBreakevenLog > 300) // A cada 5 minutos
+         if (m_logger != NULL)
          {
-            m_logger.Debug(StringFormat("Trailing #%d AGUARDANDO breakeven ser acionado primeiro", ticket));
-            lastBreakevenLog = TimeCurrent();
+            static datetime lastBreakevenLog = 0;
+            if (TimeCurrent() - lastBreakevenLog > 300)
+            {
+               m_logger.Debug(StringFormat("Trailing #%d aguardando breakeven/profit", ticket));
+               lastBreakevenLog = TimeCurrent();
+            }
          }
+         return false;
       }
-      return false; // ❌ NÃO permitir trailing antes do breakeven
    }
 
    // ✅ ADICIONADO: Log quando trailing é liberado após breakeven
@@ -1706,24 +1727,7 @@ bool CTradeExecutor::IsPositionReadyForTrailing(ulong ticket)
       }
    }
 
-   double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-   double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
    double stopLoss = PositionGetDouble(POSITION_SL);
-   ENUM_POSITION_TYPE posType = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-   string symbol = PositionGetString(POSITION_SYMBOL);
-
-   // Calcular lucro atual em pontos
-   double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
-   double profitPoints = 0;
-
-   if (posType == POSITION_TYPE_BUY)
-   {
-      profitPoints = (currentPrice - entryPrice) / point;
-   }
-   else
-   {
-      profitPoints = (entryPrice - currentPrice) / point;
-   }
 
    // ✅ CORREÇÃO CRÍTICA: Verificação simplificada e robusta
    // Só verificar lucro mínimo - R:R é verificado apenas na ativação inicial
@@ -1962,6 +1966,17 @@ void CTradeExecutor::ManagePartialTakeProfits()
       double currentPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
       double entryPrice = PositionGetDouble(POSITION_PRICE_OPEN);
       double currentVolume = PositionGetDouble(POSITION_VOLUME);
+
+      double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      ENUM_POSITION_TYPE ptype = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      double profitPts = (ptype == POSITION_TYPE_BUY) ? (currentPrice - entryPrice) / point : (entryPrice - currentPrice) / point;
+      bool breakevenTriggered = IsBreakevenTriggered(ticket);
+
+      if (!breakevenTriggered)
+      {
+         if (!m_enablePartialsWithoutBreakeven || profitPts < TRAILING_MIN_PROFIT_POINTS)
+            continue;
+      }
 
       // ✅ CONFIGURAR CONTROLE DE PARCIAIS SE NÃO EXISTE
       int configIndex = FindPartialConfigIndex(ticket);
