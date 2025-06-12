@@ -28,6 +28,8 @@
 #include "SetupClassifier.mqh"
 #include "JsonLog.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
+#include "CircuitBreaker.mqh"
+#include "TradingHoursManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -52,11 +54,23 @@ input bool EnableRangeStrategies = true;                               // Habili
 input bool EnableReversalStrategies = true;                            // Habilitar Estratégias de Reversão
 input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualidade Mínima do Setup
 
+// Configurações de Horário de Trading
+input string SessionSettings = "=== Horário de Trading ===";
+input int TradingStartHour = 9;
+input int TradingStartMinute = 15;
+input int TradingEndHour = 16;
+input int TradingEndMinute = 30;
+input int MidBreakStartHour = 12;
+input int MidBreakStartMinute = 0;
+input int MidBreakEndHour = 14;
+input int MidBreakEndMinute = 0;
+
 //+------------------------------------------------------------------+
 //| Variáveis globais                                                |
 //+------------------------------------------------------------------+
 // Objetos globais
 CLogger *g_logger = NULL;
+CCircuitBreaker *g_circuitBreaker = NULL;
 CHandlePool *g_handlePool = NULL;                               // ← NOVO: Pool global de handles
 CMarketContext *g_marketContext = NULL;
 CSignalEngine *g_signalEngine = NULL;
@@ -64,6 +78,8 @@ CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
 CJSONLogger *g_jsonLogger = NULL;
+CTradingHoursManager *g_hoursManager = NULL;
+
 
 // Array de ativos configurados
 AssetConfig g_assets[];
@@ -217,6 +233,8 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+      g_assets[index].minATRmulti = BTC_MIN_ATR_MULT;
+      g_assets[index].defaultATRmulti = BTC_DEFAULT_ATR_MULT;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA BTC
       g_assets[index].partialLevels[0] = 1.5; // Era 1.0, agora 1.5
@@ -251,6 +269,8 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+      g_assets[index].minATRmulti = WDO_MIN_ATR_MULT;
+      g_assets[index].defaultATRmulti = WDO_DEFAULT_ATR_MULT;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WDO
       g_assets[index].partialLevels[0] = 2.0; // Era 1.0, agora 2.0
@@ -285,6 +305,8 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+      g_assets[index].minATRmulti = WIN_MIN_ATR_MULT;
+      g_assets[index].defaultATRmulti = WIN_DEFAULT_ATR_MULT;  
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WIN
       g_assets[index].partialLevels[0] = 1.8; // Era 1.0, agora 1.8
@@ -342,23 +364,23 @@ bool ConfigureRiskParameters()
    for (int i = 0; i < ArraySize(g_assets); i++)
    {
       // Configurar parâmetros de risco específicos para cada ativo
-      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
+      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot, g_assets[i].defaultATRmulti);
 
       // ✅ CONFIGURAR STOPS ESPECÍFICOS POR SÍMBOLO (NOVOS VALORES)
       if (g_assets[i].symbol == "BIT$D")
       {
          // BTC: Stop mais conservador
-         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, BTC_MIN_STOP_DISTANCE, 2.8);
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, BTC_MIN_STOP_DISTANCE, BTC_MIN_ATR_MULT);
       }
       else if (g_assets[i].symbol == "WDO$D")
       {
          // WDO: Stop mais conservador
-         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, 3.5);
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, WDO_MIN_ATR_MULT);
       }
       else if (g_assets[i].symbol == "WINM25")
       {
          // WIN: Stop mais conservador
-         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, 2.5);
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, WIN_MIN_ATR_MULT);
       }
 
       // Configurar parciais para cada ativo
@@ -382,12 +404,20 @@ bool ConfigureRiskParameters()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+
+
+
    // Inicializar o logger primeiro para registrar todo o processo
    g_logger = new CLogger();
    if (g_logger == NULL)
    {
       Print("Erro ao criar objeto Logger");
       return (INIT_FAILED);
+   }
+
+   g_circuitBreaker = new CCircuitBreaker(g_logger, 3, 30);
+   if(g_circuitBreaker == NULL){
+      Print("Erro ao criar objeto Circuit Breaker");
    }
 
    // Inicializar o logger JSON após o logger principal
@@ -492,7 +522,7 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_riskManager.Initialize(g_logger, g_marketContext))
+   if (!g_riskManager.Initialize(g_logger, g_marketContext, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar RiskManager");
       return (INIT_FAILED);
@@ -512,11 +542,29 @@ int OnInit()
       return (INIT_FAILED);
    }
 
-   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext))
+   if (!g_tradeExecutor.Initialize(g_logger, g_jsonLogger, g_marketContext, g_circuitBreaker))
    {
       g_logger.Error("Falha ao inicializar TradeExecutor");
       return (INIT_FAILED);
    }
+
+   // Inicializar gerenciador de horário de trading
+   g_hoursManager = new CTradingHoursManager();
+   if (g_hoursManager == NULL)
+   {
+      g_logger.Error("Erro ao criar TradingHoursManager");
+      return (INIT_FAILED);
+   }
+   if (!g_hoursManager.Initialize(g_tradeExecutor, g_logger,
+                                 TradingStartHour, TradingStartMinute,
+                                 TradingEndHour, TradingEndMinute,
+                                 MidBreakStartHour, MidBreakStartMinute,
+                                 MidBreakEndHour, MidBreakEndMinute))
+   {
+      g_logger.Error("Falha ao inicializar TradingHoursManager");
+      return (INIT_FAILED);
+   }
+   g_hoursManager.Update();
 
    // Configurar o executor de trades
    g_tradeExecutor.SetTradeAllowed(EnableTrading);
@@ -592,6 +640,12 @@ void OnDeinit(const int reason)
       g_tradeExecutor = NULL;
    }
 
+   if (g_hoursManager != NULL)
+   {
+      delete g_hoursManager;
+      g_hoursManager = NULL;
+   }
+
    if (g_riskManager != NULL)
    {
       delete g_riskManager;
@@ -658,6 +712,9 @@ void OnTick()
       Print("Componentes não inicializados");
       return;
    }
+
+   if (g_hoursManager != NULL)
+      g_hoursManager.Update();
 
    // 1. GERENCIAMENTO CONTÍNUO DE POSIÇÕES (A CADA TICK)
    g_tradeExecutor.ManageOpenPositions();
@@ -1072,6 +1129,9 @@ void OnTimer()
    {
       return;
    }
+
+   if (g_hoursManager != NULL)
+      g_hoursManager.Update();
 
    // Exportar logs periodicamente (a cada hora)
    datetime currentTime = TimeCurrent();

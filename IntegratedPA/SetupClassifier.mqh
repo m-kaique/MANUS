@@ -260,65 +260,68 @@ SETUP_QUALITY CSetupClassifier::ClassifySetup(string symbol, ENUM_TIMEFRAMES tim
        factors.goodRiskReward ? "✓" : "✗");
    m_logger.Info(factorDetails);
 
-   // Setup A+ (Alta Qualidade)
-   if (factors.totalFactors >= 7 && signal.riskRewardRatio >= 3.0)
+   if ((factors.strongTrend && factors.patternQuality && factors.goodRiskReward))
    {
-      // Verificar critérios essenciais para A+
-      if (factors.patternQuality && factors.maAlignment && factors.nearKeyLevel &&
-          factors.goodRiskReward && (factors.strongTrend || factors.favorableStructure))
+      // Setup A+ (Alta Qualidade)
+      if (factors.totalFactors >= 7 && signal.riskRewardRatio >= 3.0)
       {
+         // Verificar critérios essenciais para A+
+         if (factors.patternQuality && factors.maAlignment && factors.nearKeyLevel &&
+             factors.goodRiskReward && (factors.strongTrend || factors.favorableStructure))
+         {
 
+            if (m_logger != NULL)
+            {
+               m_logger.Info(StringFormat("SetupClassifier: Setup A+ identificado para %s - %d fatores, R:R %.2f",
+                                          symbol, factors.totalFactors, signal.riskRewardRatio));
+            }
+            return SETUP_A_PLUS;
+         }
+      }
+
+      // Setup A (Boa Qualidade)
+      if (factors.totalFactors >= 5 && signal.riskRewardRatio >= 2.5)
+      {
+         // Verificar critérios essenciais para A
+         if (factors.patternQuality && factors.goodRiskReward &&
+             (factors.maAlignment || factors.strongTrend || factors.momentumConfirmed))
+         {
+
+            if (m_logger != NULL)
+            {
+               m_logger.Info(StringFormat("SetupClassifier: Setup A identificado para %s - %d fatores, R:R %.2f",
+                                          symbol, factors.totalFactors, signal.riskRewardRatio));
+            }
+            return SETUP_A;
+         }
+      }
+
+      // Setup B (Qualidade Intermediária)
+      if (factors.totalFactors >= 3 && signal.riskRewardRatio >= 2.0)
+      {
+         // Verificar critérios mínimos para B
+         if (factors.patternQuality || factors.goodRiskReward)
+         {
+
+            if (m_logger != NULL)
+            {
+               m_logger.Info(StringFormat("SetupClassifier: Setup B identificado para %s - %d fatores, R:R %.2f",
+                                          symbol, factors.totalFactors, signal.riskRewardRatio));
+            }
+            return SETUP_B;
+         }
+      }
+
+      // Setup C (Baixa Qualidade)
+      if (factors.totalFactors >= 1 && signal.riskRewardRatio >= 1.5)
+      {
          if (m_logger != NULL)
          {
-            m_logger.Info(StringFormat("SetupClassifier: Setup A+ identificado para %s - %d fatores, R:R %.2f",
+            m_logger.Info(StringFormat("SetupClassifier: Setup C identificado para %s - %d fatores, R:R %.2f",
                                        symbol, factors.totalFactors, signal.riskRewardRatio));
          }
-         return SETUP_A_PLUS;
+         return SETUP_C;
       }
-   }
-
-   // Setup A (Boa Qualidade)
-   if (factors.totalFactors >= 5 && signal.riskRewardRatio >= 2.5)
-   {
-      // Verificar critérios essenciais para A
-      if (factors.patternQuality && factors.goodRiskReward &&
-          (factors.maAlignment || factors.strongTrend || factors.momentumConfirmed))
-      {
-
-         if (m_logger != NULL)
-         {
-            m_logger.Info(StringFormat("SetupClassifier: Setup A identificado para %s - %d fatores, R:R %.2f",
-                                       symbol, factors.totalFactors, signal.riskRewardRatio));
-         }
-         return SETUP_A;
-      }
-   }
-
-   // Setup B (Qualidade Intermediária)
-   if (factors.totalFactors >= 3 && signal.riskRewardRatio >= 2.0)
-   {
-      // Verificar critérios mínimos para B
-      if (factors.patternQuality || factors.goodRiskReward)
-      {
-
-         if (m_logger != NULL)
-         {
-            m_logger.Info(StringFormat("SetupClassifier: Setup B identificado para %s - %d fatores, R:R %.2f",
-                                       symbol, factors.totalFactors, signal.riskRewardRatio));
-         }
-         return SETUP_B;
-      }
-   }
-
-   // Setup C (Baixa Qualidade)
-   if (factors.totalFactors >= 1 && signal.riskRewardRatio >= 1.5)
-   {
-      if (m_logger != NULL)
-      {
-         m_logger.Info(StringFormat("SetupClassifier: Setup C identificado para %s - %d fatores, R:R %.2f",
-                                    symbol, factors.totalFactors, signal.riskRewardRatio));
-      }
-      return SETUP_C;
    }
 
    // Setup Inválido
@@ -514,13 +517,12 @@ bool CSetupClassifier::CheckMomentum(string symbol, ENUM_TIMEFRAMES timeframe, S
       return false;
 
    double rsiBuffer[];
-   //✅ Configurar array como série temporal
+   // ✅ Configurar array como série temporal
 
    ArraySetAsSeries(rsiBuffer, true);
 
    if (rsiHandle.CopyBuffer(0, 0, 3, rsiBuffer) <= 0)
       return false;
-
 
    double rsi = rsiBuffer[0];
 

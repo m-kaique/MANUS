@@ -36,6 +36,7 @@ enum SETUP_QUALITY
    SETUP_C        // Setup de baixa qualidade
 };
 
+
 //+------------------------------------------------------------------+
 //| Enumeração para Níveis de Log                                    |
 //+------------------------------------------------------------------+
@@ -144,6 +145,24 @@ struct AdaptivePartialConfig
          adaptedPercentages[i] = 0.0;
       }
    }
+};
+
+//+------------------------------------------------------------------+
+//| Estrutura para Qualidade X Escalamento                           |
+//+------------------------------------------------------------------+
+struct QualityBasedScaling {
+    SETUP_QUALITY quality;
+    double maxScalingFactor;
+    double riskMultiplier;
+    string description;
+};
+
+QualityBasedScaling g_scalingTable[] = {
+    {SETUP_A_PLUS, 5.0, 1.0, "A+"},
+    {SETUP_A,      3.0, 0.8, "A"},
+    {SETUP_B,      2.0, 0.6, "B"},
+    {SETUP_C,      1.0, 0.4, "C"},
+    {SETUP_INVALID,0.0, 0.0, "Inválido"}
 };
 
 //+------------------------------------------------------------------+
@@ -368,6 +387,8 @@ struct AssetConfig
    double partialVolumes[3];
    bool historyAvailable; // Flag para indicar se o histórico está disponível
    int minRequiredBars;   // Mínimo de barras necessárias para análise
+   double minATRmulti;
+   double defaultATRmulti;
    
    // ✅ NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS
    PARTIAL_STRATEGY partialStrategy;        // Estratégia de parciais
