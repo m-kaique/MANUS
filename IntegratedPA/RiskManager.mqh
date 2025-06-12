@@ -1800,6 +1800,9 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
       UpdateAccountInfo();
    double newRisk = (riskValue / m_accountBalance) * 100.0;
    double currentRisk = GetCurrentTotalRisk();
+   if(m_logger != NULL)
+      m_logger.Debug(StringFormat("currentRisk=%.2f newRisk=%.2f maxRisk=%.2f",
+                                 currentRisk, newRisk, m_maxTotalRisk));
    if (currentRisk + newRisk > m_maxTotalRisk)
    {
       if (m_logger != NULL)
