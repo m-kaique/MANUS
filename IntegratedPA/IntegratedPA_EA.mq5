@@ -60,6 +60,10 @@ input int TradingStartHour = 9;
 input int TradingStartMinute = 15;
 input int TradingEndHour = 16;
 input int TradingEndMinute = 30;
+input int MidBreakStartHour = 12;
+input int MidBreakStartMinute = 0;
+input int MidBreakEndHour = 14;
+input int MidBreakEndMinute = 0;
 
 //+------------------------------------------------------------------+
 //| Variáveis globais                                                |
@@ -551,7 +555,11 @@ int OnInit()
       g_logger.Error("Erro ao criar TradingHoursManager");
       return (INIT_FAILED);
    }
-   if (!g_hoursManager.Initialize(g_tradeExecutor, g_logger, TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute))
+   if (!g_hoursManager.Initialize(g_tradeExecutor, g_logger,
+                                 TradingStartHour, TradingStartMinute,
+                                 TradingEndHour, TradingEndMinute,
+                                 MidBreakStartHour, MidBreakStartMinute,
+                                 MidBreakEndHour, MidBreakEndMinute))
    {
       g_logger.Error("Falha ao inicializar TradingHoursManager");
       return (INIT_FAILED);
