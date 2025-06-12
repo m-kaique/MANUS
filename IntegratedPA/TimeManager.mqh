@@ -19,6 +19,17 @@ private:
    bool      m_closeExecuted; // se close forçado já executado
    CTrade    m_trade;         // handler de trade MT5
 
+   // Obtém o dia corrente (zerando hora/min/seg)
+   datetime GetToday()
+   {
+      MqlDateTime tm;
+      TimeToStruct(TimeCurrent(), tm);
+      tm.hour = 0;
+      tm.min  = 0;
+      tm.sec  = 0;
+      return StructToTime(tm);
+   }
+
    // Atualiza m_cutoff para um determinado dia
    void UpdateCutoff(datetime day)
    {
@@ -40,7 +51,7 @@ public:
       m_bufferMin     = InpCutoffBufferMin;
       m_entryBlocked  = false;
       m_closeExecuted = false;
-      m_currentDay = DateCurrent();
+      m_currentDay = GetToday();
       UpdateCutoff(m_currentDay);
       TradingControl::EnableEntry();
       TradingControl::EnableExit();
@@ -51,7 +62,7 @@ public:
    void Pulse()
    {
       datetime now = TimeCurrent();
-      datetime today = DateCurrent();
+      datetime today = GetToday();
 
       // Recalcula cutoff e reseta flags se o dia mudou
       if(today != m_currentDay)
