@@ -1,6 +1,5 @@
 #ifndef __TRADING_CONTROL_MQH__
 #define __TRADING_CONTROL_MQH__
-#pragma  once
 
 namespace TradingControl
 {

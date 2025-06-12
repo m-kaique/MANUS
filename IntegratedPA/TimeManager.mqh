@@ -1,6 +1,5 @@
 #ifndef __TIME_MANAGER_MQH__
 #define __TIME_MANAGER_MQH__
-#pragma  once
 
 #include <Trade/Trade.mqh>
 #include "TradingControl.mqh"
@@ -27,11 +26,16 @@ public:
       m_entryBlocked  = false;
       m_closeExecuted = false;
 
-      // converte HH:MM ➜ datetime na data corrente
+      // converte HH:MM para datetime no dia corrente
       int h = (int)StringToInteger(StringSubstr(InpSessionCutoff,0,2));
       int m = (int)StringToInteger(StringSubstr(InpSessionCutoff,3,2));
-      datetime today = DateCurrent();
-      m_cutoff = today + h*3600 + m*60; // hoje HH:MM:00
+      datetime now  = TimeCurrent();
+      MqlDateTime tm;
+      TimeToStruct(now, tm);
+      tm.hour = h;
+      tm.min  = m;
+      tm.sec  = 0;
+      m_cutoff = StructToTime(tm);
       return true;
    }
 
@@ -80,14 +84,11 @@ private:
 
       for(int i = PositionsTotal()-1; i >= 0; --i)
       {
-         if(!PositionSelectByIndex(i))
+         ulong ticket = PositionGetTicket(i);
+         if(ticket==0 || !PositionSelectByTicket(ticket))
             continue;
 
-         ulong ticket   = PositionGetTicket(i);
-         string symbol  = PositionGetString(POSITION_SYMBOL);
-         double volume  = PositionGetDouble(POSITION_VOLUME);
-
-         if(!m_trade.PositionClose(ticket, volume, 10))
+         if(!m_trade.PositionClose(ticket))
             Print("[ForceClose] Falha ao fechar posição", ticket, " - ", m_trade.ResultRetcode());
       }
 
