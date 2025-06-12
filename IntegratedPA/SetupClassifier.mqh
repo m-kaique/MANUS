@@ -299,9 +299,18 @@ SETUP_QUALITY CSetupClassifier::ClassifySetup(string symbol, ENUM_TIMEFRAMES tim
       // Setup B (Qualidade Intermediária)
       if (factors.totalFactors >= 3 && signal.riskRewardRatio >= 2.0)
       {
+                     m_logger.Info(StringFormat(
+            "Q=%s factors=%d pattern=%s goodRR=%s R:R=%.2f",
+             (factors.patternQuality),
+            factors.totalFactors,
+            factors.patternQuality ? "✓":"✗",
+            factors.goodRiskReward ? "✓":"✗",
+            signal.riskRewardRatio));
          // Verificar critérios mínimos para B
          if (factors.patternQuality || factors.goodRiskReward)
          {
+
+
 
             if (m_logger != NULL)
             {

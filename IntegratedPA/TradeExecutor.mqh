@@ -360,9 +360,18 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       switch (request.type)
       {
       case ORDER_TYPE_BUY:
+            //       // ✅ bool  Buy(
+            // double        volume,          // position volume
+            // const string  symbol=NULL,     // symbol
+            // double        price=0.0,       // execution price
+            // double        sl=0.0,          // stop loss price
+            // double        tp=0.0,          // take profit price
+            // const string  comment=""       // comment
+            // )
          result = m_trade.Buy(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
          break;
       case ORDER_TYPE_SELL:
+         // ✅ CORREÇÃO: Parâmetros corretos - Sell(volume, symbol, price, slippage, sl, tp, comment)
          result = m_trade.Sell(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
          break;
       case ORDER_TYPE_BUY_LIMIT:
