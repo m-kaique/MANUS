@@ -25,7 +25,6 @@
 #include "DrawdownController.mqh"
 #include "../Core/MetricsCollector.mqh"
 #include "PartialManager.mqh"
-#include "ClampStop.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -2137,6 +2136,7 @@ double CRiskManager::GetCurrentTotalRisk() {
 }
 
 #include "PositionSizing.mqh"
+#include "ClampStop.mqh"
 #include "RiskValidation.mqh"
 #endif // RISKMANAGER_MQH
 
