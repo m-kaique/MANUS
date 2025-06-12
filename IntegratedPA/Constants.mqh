@@ -168,6 +168,8 @@ input int WIN_MIN_STOP_DISTANCE = 100;                // Distância mínima do s
 input int WIN_BREAKEVEN_TRIGGER = 400;                // Move SL para BE após este lucro
 input int WIN_PARTIAL_CLOSE_1 = 400;                  // Fecha 50% da posição no 1º alvo
 input int WIN_MAX_HOLDING_BARS = 240;                 // Máximo 12h em M3 (240 * 3min)
+input int WIN_MIN_ATR_MULT = 2.0;                     // Multiplicador de ATR mínimo
+input double WIN_DEFAULT_ATR_MULT = 2.0;              // Multiplicador de ATR padrão
 
 //+------------------------------------------------------------------+
 //| WDO (Mini Dólar) - Valores em pontos                            |
@@ -179,6 +181,8 @@ input int WDO_FIRST_TARGET = 25;                      // Primeiro alvo
 input int WDO_SECOND_TARGET = 45;                     // Segundo alvo
 input int WDO_TRAILING_STOP = 18;                     // Trailing stop
 input int WDO_MIN_STOP_DISTANCE = 10;                 // Distância mínima do stop
+input int WDO_MIN_ATR_MULT = 2.0;                     // Multiplicador de ATR mínimo
+input double WDO_DEFAULT_ATR_MULT = 2.0;              // Multiplicador de ATR padrão
 
 //+------------------------------------------------------------------+
 //| BTC (Bitcoin Futuros) - Valores em USD                          |
@@ -190,13 +194,15 @@ input int BTC_FIRST_TARGET = 2000;                    // Primeiro alvo
 input int BTC_SECOND_TARGET = 4000;                   // Segundo alvo
 input int BTC_TRAILING_STOP = 1000;                   // Trailing stop
 input int BTC_MIN_STOP_DISTANCE = 600;                // Distância mínima do stop
+input int BTC_MIN_ATR_MULT = 2.0;                     // Multiplicador de ATR mínimo 
+input double BTC_DEFAULT_ATR_MULT = 2.0;              // Multiplicador de ATR padrão
 
 //+------------------------------------------------------------------+
 //| STOP LOSS MAIS CONSERVADORES                                     |
 //+------------------------------------------------------------------+
 input group "=== STOP LOSS AVANÇADO ==="
 input double DEFAULT_ATR_MULTIPLIER = 3.0;            // Multiplicador ATR padrão
-input double MIN_ATR_MULTIPLIER = 2.5;                // Multiplicador ATR mínimo
+input double MIN_ATR_MULTIPLIER = 2.0;                // Multiplicador ATR mínimo
 input double MAX_ATR_MULTIPLIER = 5.0;                // Multiplicador ATR máximo
 input double STOP_LOSS_BUFFER_PERCENT = 0.2;          // Buffer adicional de 20% no stop loss
 input double MIN_STOP_DISTANCE_PERCENT = 1.5;         // Mínimo 1.5% de distância do preço atual

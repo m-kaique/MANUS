@@ -220,6 +220,8 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+      g_assets[index].minATRmulti = BTC_MIN_ATR_MULT;
+      g_assets[index].defaultATRmulti = BTC_DEFAULT_ATR_MULT;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA BTC
       g_assets[index].partialLevels[0] = 1.5; // Era 1.0, agora 1.5
@@ -254,6 +256,8 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+      g_assets[index].minATRmulti = WDO_MIN_ATR_MULT;
+      g_assets[index].defaultATRmulti = WDO_DEFAULT_ATR_MULT;
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WDO
       g_assets[index].partialLevels[0] = 2.0; // Era 1.0, agora 2.0
@@ -288,6 +292,8 @@ bool SetupAssets()
       g_assets[index].usePartials = true;
       g_assets[index].historyAvailable = false;
       g_assets[index].minRequiredBars = MIN_REQUIRED_BARS;
+      g_assets[index].minATRmulti = WIN_MIN_ATR_MULT;
+      g_assets[index].defaultATRmulti = WIN_DEFAULT_ATR_MULT;  
 
       // ✅ CONFIGURAR NÍVEIS DE PARCIAIS MAIS CONSERVADORES PARA WIN
       g_assets[index].partialLevels[0] = 1.8; // Era 1.0, agora 1.8
@@ -345,23 +351,23 @@ bool ConfigureRiskParameters()
    for (int i = 0; i < ArraySize(g_assets); i++)
    {
       // Configurar parâmetros de risco específicos para cada ativo
-      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
+      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot, g_assets[i].defaultATRmulti);
 
       // ✅ CONFIGURAR STOPS ESPECÍFICOS POR SÍMBOLO (NOVOS VALORES)
       if (g_assets[i].symbol == "BIT$D")
       {
          // BTC: Stop mais conservador
-         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, BTC_MIN_STOP_DISTANCE, 2.8);
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, BTC_MIN_STOP_DISTANCE, BTC_MIN_ATR_MULT);
       }
       else if (g_assets[i].symbol == "WDO$D")
       {
          // WDO: Stop mais conservador
-         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, 3.5);
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WDO_MIN_STOP_DISTANCE, WDO_MIN_ATR_MULT);
       }
       else if (g_assets[i].symbol == "WINM25")
       {
          // WIN: Stop mais conservador
-         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, 2.5);
+         g_riskManager.ConfigureSymbolStopLoss(g_assets[i].symbol, WIN_MIN_STOP_DISTANCE, WIN_MIN_ATR_MULT);
       }
 
       // Configurar parciais para cada ativo

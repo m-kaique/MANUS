@@ -125,7 +125,7 @@ public:
    void SetMaxTotalRisk(double percentage) { m_maxTotalRisk = percentage; }
 
    // ✅ MÉTODOS PARA CONFIGURAÇÃO DE SÍMBOLOS ORIGINAIS MANTIDOS
-   bool AddSymbol(string symbol, double riskPercentage, double maxLotSize);
+   bool AddSymbol(string symbol, double riskPercentage, double maxLotSize, double defaultATRmulti);
    bool ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier);
    bool ConfigureSymbolPartials(string symbol, bool usePartials, double &levels[], double &volumes[]);
 
@@ -236,7 +236,7 @@ void CRiskManager::UpdateAccountInfo()
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO ORIGINAL MANTIDA: Adicionar símbolo                   |
 //+------------------------------------------------------------------+
-bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLotSize)
+bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLotSize, double defaultATRmulti)
 {
    // Verificar se o símbolo já existe
    int index = FindSymbolIndex(symbol);
@@ -273,7 +273,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
    m_symbolParams[size].riskPercentage = riskPercentage;
    m_symbolParams[size].maxLotSize = maxLotSize;
    m_symbolParams[size].defaultStopPoints = 100; // Valor padrão
-   m_symbolParams[size].atrMultiplier = 2.0;     // Valor padrão
+   m_symbolParams[size].atrMultiplier = defaultATRmulti;     // Valor padrão
    m_symbolParams[size].usePartials = false;
 
    // ✅ INICIALIZAR NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS

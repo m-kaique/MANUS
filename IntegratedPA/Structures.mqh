@@ -387,6 +387,8 @@ struct AssetConfig
    double partialVolumes[3];
    bool historyAvailable; // Flag para indicar se o histórico está disponível
    int minRequiredBars;   // Mínimo de barras necessárias para análise
+   double minATRmulti;
+   double defaultATRmulti;
    
    // ✅ NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS
    PARTIAL_STRATEGY partialStrategy;        // Estratégia de parciais
