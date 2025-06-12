@@ -91,7 +91,9 @@ public:
          return true;
       TradingHours h=GetHours(symbol);
       datetime now=TimeCurrent();
-      int current=TimeHour(now)*60+TimeMinute(now);
+      MqlDateTime tm;
+      TimeToStruct(now, tm);
+      int current=tm.hour*60+tm.min;
       int start=h.startHour*60+h.startMinute;
       int end=h.endHour*60+h.endMinute;
       return(current>=start && current<=end);
@@ -102,7 +104,9 @@ public:
       if(!m_enabled)
          return false;
       datetime now=TimeCurrent();
-      int current=TimeHour(now)*60+TimeMinute(now);
+      MqlDateTime tm;
+      TimeToStruct(now, tm);
+      int current=tm.hour*60+tm.min;
       int closeTime=m_defaultHours.closeHour*60+m_defaultHours.closeMinute;
       return(current>=closeTime);
      }
