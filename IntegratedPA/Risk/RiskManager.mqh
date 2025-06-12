@@ -25,6 +25,7 @@
 #include "DrawdownController.mqh"
 #include "../Core/MetricsCollector.mqh"
 #include "PartialManager.mqh"
+#include "ClampStop.mqh"
 
 //+------------------------------------------------------------------+
 //| Setup-risk correlation matrix                                    |
@@ -87,6 +88,7 @@ private:
       double         riskPercentage;
       double         maxLotSize;
       double         defaultStopPoints;
+      double         maxStopPoints;
       double         atrMultiplier;
       bool           usePartials;
       double         partialLevels[10];    // Níveis de R:R para parciais
@@ -117,7 +119,7 @@ private:
    QualityScalingTiers m_qualityScaling[5];
    
    // ✅ MÉTODOS PRIVADOS ORIGINAIS MANTIDOS
-   double CalculatePositionSize(string symbol, double entryPrice, double stopLoss, double riskPercentage);
+   double CalculatePositionSize(string symbol, double entryPrice, double stopLoss, double riskPercentage, bool stopClamped=false);
    double AdjustLotSize(string symbol, double lotSize);
    double GetSymbolTickValue(string symbol);
    double GetSymbolPointValue(string symbol);
@@ -125,6 +127,7 @@ private:
    double CalculateATRValue(string symbol, ENUM_TIMEFRAMES timeframe, int period);
    bool ValidateMarketPrice(string symbol, double &price);
    bool ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double price, double &stopLoss);
+   double ClampStopAndLot(string symbol, ENUM_ORDER_TYPE type, double entryPrice, double riskPercent, double &stopLoss, double currentVolume);
    
    // ✅ NOVOS MÉTODOS PARA PARCIAIS UNIVERSAIS - CORRIGIDOS PARA MQL5
    ASSET_TYPE ClassifyAssetType(string symbol);
@@ -178,7 +181,7 @@ public:
    
    // ✅ MÉTODOS PARA CONFIGURAÇÃO DE SÍMBOLOS ORIGINAIS MANTIDOS
    bool AddSymbol(string symbol, double riskPercentage, double maxLotSize);
-   bool ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier);
+   bool ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier, double maxStopPoints=0);
    bool ConfigureSymbolPartials(string symbol, bool usePartials, double &levels[], double &volumes[]);
    
    // ✅ NOVOS MÉTODOS PARA CONFIGURAÇÃO DE PARCIAIS UNIVERSAIS
@@ -340,6 +343,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
    m_symbolParams[size].riskPercentage = riskPercentage;
    m_symbolParams[size].maxLotSize = maxLotSize;
    m_symbolParams[size].defaultStopPoints = 100;  // Valor padrão
+   m_symbolParams[size].maxStopPoints = 200;      // Limite de stop
    m_symbolParams[size].atrMultiplier = 2.0;      // Valor padrão
    m_symbolParams[size].usePartials = false;
    
@@ -373,7 +377,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO ORIGINAL MANTIDA: Configurar stop loss                |
 //+------------------------------------------------------------------+
-bool CRiskManager::ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier) {
+bool CRiskManager::ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier, double maxStopPoints=0) {
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
    
@@ -386,7 +390,8 @@ bool CRiskManager::ConfigureSymbolStopLoss(string symbol, double defaultStopPoin
    
    // Atualizar parâmetros
    m_symbolParams[index].defaultStopPoints = defaultStopPoints;
-   m_symbolParams[index].atrMultiplier = atrMultiplier;
+   m_symbolParams[index].atrMultiplier   = atrMultiplier;
+   m_symbolParams[index].maxStopPoints   = (maxStopPoints>0 ? maxStopPoints : defaultStopPoints*2);
    
    if(m_logger != NULL) {
       m_logger.Info(StringFormat("RiskManager: Stop loss configurado para %s: %.1f pontos, ATR x%.1f", 
@@ -1791,9 +1796,25 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
    // Encontrar índice do símbolo
    int index = FindSymbolIndex(symbol);
    double riskPercentage = (index >= 0) ? m_symbolParams[index].riskPercentage : m_defaultRiskPercentage;
+
+   if(index >= 0 && signal.quality == SETUP_B)
+   {
+      double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
+      double distPts = MathAbs(request.price - request.stopLoss) / point;
+      if(distPts > m_symbolParams[index].defaultStopPoints * 1.5)
+      {
+         if(m_logger != NULL)
+            m_logger.LogRiskEvent(symbol, "STOP_TOO_WIDE", distPts, "Setup B reject");
+         request.volume = 0;
+         if(m_circuitBreaker != NULL)
+            m_circuitBreaker.RegisterError();
+         return request;
+      }
+   }
    
-   // ✅ CALCULAR VOLUME BASE
+  // ✅ CALCULAR VOLUME BASE
   double baseVolume = CalculatePositionSize(symbol, request.price, request.stopLoss, riskPercentage);
+  baseVolume = ClampStopAndLot(symbol, request.type, request.price, riskPercentage, request.stopLoss, baseVolume);
 
   if(baseVolume <= 0) {
       if(m_logger != NULL) {

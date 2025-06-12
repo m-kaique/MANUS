@@ -70,11 +70,21 @@ bool CRiskManager::ValidateStopLoss(string symbol, ENUM_ORDER_TYPE type, double 
       return false;
    }
 
-   double maxDist = price * 0.10;
-   if(distance > maxDist) {
+   int index = FindSymbolIndex(symbol);
+   double distPts = distance / point;
+   double maxPts = 0.0;
+   double atrLimit = 0.0;
+   if(index >= 0)
+   {
+      maxPts = m_symbolParams[index].maxStopPoints;
+      double atr = CalculateATRValue(symbol, PERIOD_CURRENT, 14);
+      atrLimit = (atr > 0) ? (atr * m_symbolParams[index].atrMultiplier) / point : 0.0;
+   }
+
+   if((maxPts > 0 && distPts > maxPts) || (atrLimit > 0 && distPts > atrLimit))
+   {
       if(m_logger != NULL)
-         m_logger.Error(StringFormat("RiskManager: Stop loss muito distante para %s (%.5f > %.5f)",
-                                     symbol, distance, maxDist));
+         m_logger.LogRiskEvent(symbol, "STOP_TOO_WIDE", distPts, "Validation");
       return false;
    }
 

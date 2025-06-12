@@ -502,5 +502,13 @@ public:
       LogCategorized(LOG_QUALITY_CORRELATION, LOG_LEVEL_INFO, symbol, action, values,
                      "Setup quality determined risk parameters");
    }
+
+   // Log risk management related events
+   void LogRiskEvent(string symbol, string event, double value, string reason)
+   {
+      string action = "[RISK] " + event;
+      string values = StringFormat("Value=%.2f", value);
+      LogCategorized(LOG_RISK_MANAGEMENT, LOG_LEVEL_WARNING, symbol, action, values, reason);
+   }
 };
 

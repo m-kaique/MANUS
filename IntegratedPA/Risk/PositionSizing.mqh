@@ -5,7 +5,7 @@
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO ORIGINAL MANTIDA: CalculatePositionSize              |
 //+------------------------------------------------------------------+
-double CRiskManager::CalculatePositionSize(string symbol, double entryPrice, double stopLoss, double riskPercentage) {
+double CRiskManager::CalculatePositionSize(string symbol, double entryPrice, double stopLoss, double riskPercentage, bool stopClamped=false) {
    // Validar parâmetros
    if(entryPrice <= 0 || stopLoss <= 0 || riskPercentage <= 0) {
       if(m_logger != NULL) {
@@ -40,6 +40,9 @@ double CRiskManager::CalculatePositionSize(string symbol, double entryPrice, dou
    
    // Ajustar para lotes válidos
    positionSize = AdjustLotSize(symbol, positionSize);
+
+   if(stopClamped && m_logger != NULL)
+      m_logger.LogRiskEvent(symbol, "LOT_REDUCED", positionSize, "Stop clamped");
    
    if(m_logger != NULL) {
       m_logger.Debug(StringFormat("RiskManager: Posição calculada para %s: %.3f lotes (risco: %.2f, pontos: %.1f)", 
