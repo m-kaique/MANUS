@@ -29,6 +29,7 @@
 #include "JsonLog.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
 #include "CircuitBreaker.mqh"
+#include "TradingHoursManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -53,6 +54,13 @@ input bool EnableRangeStrategies = true;                               // Habili
 input bool EnableReversalStrategies = true;                            // Habilitar Estratégias de Reversão
 input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualidade Mínima do Setup
 
+// Configurações de Horário de Trading
+input string SessionSettings = "=== Horário de Trading ===";
+input int TradingStartHour = 9;
+input int TradingStartMinute = 15;
+input int TradingEndHour = 16;
+input int TradingEndMinute = 30;
+
 //+------------------------------------------------------------------+
 //| Variáveis globais                                                |
 //+------------------------------------------------------------------+
@@ -66,6 +74,7 @@ CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
 CJSONLogger *g_jsonLogger = NULL;
+CTradingHoursManager *g_hoursManager = NULL;
 
 
 // Array de ativos configurados
@@ -535,6 +544,20 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+   // Inicializar gerenciador de horário de trading
+   g_hoursManager = new CTradingHoursManager();
+   if (g_hoursManager == NULL)
+   {
+      g_logger.Error("Erro ao criar TradingHoursManager");
+      return (INIT_FAILED);
+   }
+   if (!g_hoursManager.Initialize(g_tradeExecutor, g_logger, TradingStartHour, TradingStartMinute, TradingEndHour, TradingEndMinute))
+   {
+      g_logger.Error("Falha ao inicializar TradingHoursManager");
+      return (INIT_FAILED);
+   }
+   g_hoursManager.Update();
+
    // Configurar o executor de trades
    g_tradeExecutor.SetTradeAllowed(EnableTrading);
    //
@@ -609,6 +632,12 @@ void OnDeinit(const int reason)
       g_tradeExecutor = NULL;
    }
 
+   if (g_hoursManager != NULL)
+   {
+      delete g_hoursManager;
+      g_hoursManager = NULL;
+   }
+
    if (g_riskManager != NULL)
    {
       delete g_riskManager;
@@ -675,6 +704,9 @@ void OnTick()
       Print("Componentes não inicializados");
       return;
    }
+
+   if (g_hoursManager != NULL)
+      g_hoursManager.Update();
 
    // 1. GERENCIAMENTO CONTÍNUO DE POSIÇÕES (A CADA TICK)
    g_tradeExecutor.ManageOpenPositions();
@@ -1089,6 +1121,9 @@ void OnTimer()
    {
       return;
    }
+
+   if (g_hoursManager != NULL)
+      g_hoursManager.Update();
 
    // Exportar logs periodicamente (a cada hora)
    datetime currentTime = TimeCurrent();
