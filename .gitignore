@@ -31,6 +31,7 @@
 *.lib
 
 # Executables
+*.ex5
 *.exe
 *.out
 *.app
