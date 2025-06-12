@@ -29,6 +29,7 @@
 #include "JsonLog.mqh"
 #include "Indicators/IndicatorHandlePool.mqh"
 #include "CircuitBreaker.mqh"
+#include "TimeManager.mqh"
 
 //+------------------------------------------------------------------+
 //| Parâmetros de entrada                                            |
@@ -53,6 +54,19 @@ input bool EnableRangeStrategies = true;                               // Habili
 input bool EnableReversalStrategies = true;                            // Habilitar Estratégias de Reversão
 input SETUP_QUALITY MinSetupQuality = SETUP_B;                         // Qualidade Mínima do Setup
 
+// Configurações de Horário
+input string TimeSettings = "=== Horários de Negociação ==="; // Grupo de horários
+input bool EnableTradingHours = true;                          // Ativar controle de horário
+input string DefaultStartTime = "09:15";                       // Início padrão
+input string DefaultEndTime = "15:30";                         // Fim padrão
+input string ForceCloseTime = "17:00";                         // Fechamento forçado
+input string BTC_StartTime = "";                               // Início BTC (opcional)
+input string BTC_EndTime = "";                                 // Fim BTC (opcional)
+input string WDO_StartTime = "";                               // Início WDO (opcional)
+input string WDO_EndTime = "";                                 // Fim WDO (opcional)
+input string WIN_StartTime = "";                               // Início WIN (opcional)
+input string WIN_EndTime = "";                                 // Fim WIN (opcional)
+
 //+------------------------------------------------------------------+
 //| Variáveis globais                                                |
 //+------------------------------------------------------------------+
@@ -66,6 +80,7 @@ CRiskManager *g_riskManager = NULL;
 CTradeExecutor *g_tradeExecutor = NULL;
 CSetupClassifier *g_setupClassifier = NULL;
 CJSONLogger *g_jsonLogger = NULL;
+CTimeManager *g_timeManager = NULL;
 
 
 // Array de ativos configurados
@@ -535,6 +550,48 @@ int OnInit()
       return (INIT_FAILED);
    }
 
+   // Inicializar gerenciador de horários
+   g_timeManager = new CTimeManager();
+   if (g_timeManager == NULL)
+   {
+      g_logger.Error("Erro ao criar TimeManager");
+      return (INIT_FAILED);
+   }
+
+   TradingHours defHours;
+   g_timeManager.ParseTimeString(DefaultStartTime, defHours.startHour, defHours.startMinute);
+   g_timeManager.ParseTimeString(DefaultEndTime, defHours.endHour, defHours.endMinute);
+   g_timeManager.ParseTimeString(ForceCloseTime, defHours.closeHour, defHours.closeMinute);
+
+   g_timeManager.Initialize(g_logger, g_tradeExecutor, defHours);
+   g_timeManager.Enable(EnableTradingHours);
+
+   for (int i = 0; i < ArraySize(g_assets); i++)
+   {
+      TradingHours th = defHours;
+      if (g_assets[i].symbol == "BIT$D" && BTC_StartTime != "" && BTC_EndTime != "")
+      {
+         g_timeManager.ParseTimeString(BTC_StartTime, th.startHour, th.startMinute);
+         g_timeManager.ParseTimeString(BTC_EndTime, th.endHour, th.endMinute);
+         g_assets[i].useCustomTradingHours = true;
+      }
+      else if (g_assets[i].symbol == "WDO$D" && WDO_StartTime != "" && WDO_EndTime != "")
+      {
+         g_timeManager.ParseTimeString(WDO_StartTime, th.startHour, th.startMinute);
+         g_timeManager.ParseTimeString(WDO_EndTime, th.endHour, th.endMinute);
+         g_assets[i].useCustomTradingHours = true;
+      }
+      else if (g_assets[i].symbol == "WINM25" && WIN_StartTime != "" && WIN_EndTime != "")
+      {
+         g_timeManager.ParseTimeString(WIN_StartTime, th.startHour, th.startMinute);
+         g_timeManager.ParseTimeString(WIN_EndTime, th.endHour, th.endMinute);
+         g_assets[i].useCustomTradingHours = true;
+      }
+
+      g_assets[i].tradingHours = th;
+      g_timeManager.ConfigureSymbol(g_assets[i].symbol, th);
+   }
+
    // Configurar o executor de trades
    g_tradeExecutor.SetTradeAllowed(EnableTrading);
    //
@@ -609,6 +666,12 @@ void OnDeinit(const int reason)
       g_tradeExecutor = NULL;
    }
 
+   if (g_timeManager != NULL)
+   {
+      delete g_timeManager;
+      g_timeManager = NULL;
+   }
+
    if (g_riskManager != NULL)
    {
       delete g_riskManager;
@@ -674,6 +737,12 @@ void OnTick()
    {
       Print("Componentes não inicializados");
       return;
+   }
+
+   if (g_timeManager != NULL)
+   {
+      g_timeManager.UpdatePermissions();
+      g_timeManager.CheckForcedClose();
    }
 
    // 1. GERENCIAMENTO CONTÍNUO DE POSIÇÕES (A CADA TICK)
@@ -784,6 +853,12 @@ Signal GenerateSignalByPhase(string symbol, MARKET_PHASE phase)
 //+------------------------------------------------------------------+
 bool TryImmediateExecution(string symbol, Signal &signal, MARKET_PHASE phase)
 {
+   if (g_timeManager != NULL && !g_timeManager.IsWithinTradingHours(symbol))
+   {
+      if (g_logger != NULL)
+         g_logger.Info("Horário fora da janela de negociação para " + symbol);
+      return false;
+   }
    // Verificar se as condições de entrada estão ativas AGORA
    MqlTick lastTick;
    if (!SymbolInfoTick(symbol, lastTick))
@@ -933,6 +1008,13 @@ void ProcessPendingSignals()
       if (HasOpenPosition(g_pendingSignals[i].signal.symbol))
       {
          g_pendingSignals[i].isActive = false;
+         continue;
+      }
+
+      if (g_timeManager != NULL && !g_timeManager.IsWithinTradingHours(g_pendingSignals[i].signal.symbol))
+      {
+         if (g_logger != NULL)
+            g_logger.Info("Horário fora da janela para pendente " + g_pendingSignals[i].signal.symbol);
          continue;
       }
 
@@ -1108,6 +1190,12 @@ void OnTimer()
          // g_tradeExecutor.LogBreakevenReport();
       }
       lastBreakevenReport = currentTime;
+   }
+
+   if (g_timeManager != NULL)
+   {
+      g_timeManager.UpdatePermissions();
+      g_timeManager.CheckForcedClose();
    }
 
    // Limpar sinais pendentes expirados

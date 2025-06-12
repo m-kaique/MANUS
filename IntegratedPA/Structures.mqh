@@ -371,6 +371,27 @@ struct LastSignalInfo
    bool isActive;
 };
 
+// Estrutura para definir horários de negociação
+struct TradingHours
+{
+   int startHour;      // Hora de início das operações
+   int startMinute;    // Minuto de início
+   int endHour;        // Hora de término das operações
+   int endMinute;      // Minuto de término
+   int closeHour;      // Hora para forçar fechamento
+   int closeMinute;    // Minuto para forçar fechamento
+
+   TradingHours()
+   {
+      startHour = 9;
+      startMinute = 15;
+      endHour = 15;
+      endMinute = 30;
+      closeHour = 17;
+      closeMinute = 0;
+   }
+};
+
 // Estrutura para armazenar parâmetros dos ativos
 struct AssetConfig
 {
@@ -398,6 +419,8 @@ struct AssetConfig
    ASSET_TYPE assetType;                    // Tipo de ativo detectado
    LotCharacteristics lotChar;              // Características de lote
    AdaptivePartialConfig lastPartialConfig; // Última configuração aplicada
+   bool useCustomTradingHours;              // Utiliza horário personalizado
+   TradingHours tradingHours;               // Horários específicos do ativo
    
    // Construtor
    AssetConfig()
@@ -427,6 +450,8 @@ struct AssetConfig
       allowVolumeScaling = false;
       maxScalingFactor = 3.0;
       assetType = ASSET_UNKNOWN;
+      useCustomTradingHours = false;
+      tradingHours = TradingHours();
    }
 };
 
