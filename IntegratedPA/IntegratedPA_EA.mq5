@@ -345,7 +345,7 @@ bool ConfigureRiskParameters()
    for (int i = 0; i < ArraySize(g_assets); i++)
    {
       // Configurar parâmetros de risco específicos para cada ativo
-      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot);
+      g_riskManager.AddSymbol(g_assets[i].symbol, g_assets[i].riskPercentage, g_assets[i].maxLot, DEFAULT_ATR_MULTIPLIER);
 
       // ✅ CONFIGURAR STOPS ESPECÍFICOS POR SÍMBOLO (NOVOS VALORES)
       if (g_assets[i].symbol == "BIT$D")

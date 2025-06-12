@@ -52,7 +52,7 @@ private:
       double riskPercentage;
       double maxLotSize;
       double defaultStopPoints;
-      double atrMultiplier;
+      double atrMultiplier = 2.5;
       bool usePartials;
       double partialLevels[10];  // Níveis de R:R para parciais
       double partialVolumes[10]; // Volumes para cada parcial (em %)
@@ -125,7 +125,7 @@ public:
    void SetMaxTotalRisk(double percentage) { m_maxTotalRisk = percentage; }
 
    // ✅ MÉTODOS PARA CONFIGURAÇÃO DE SÍMBOLOS ORIGINAIS MANTIDOS
-   bool AddSymbol(string symbol, double riskPercentage, double maxLotSize);
+   bool AddSymbol(string symbol, double riskPercentage, double maxLotSize, double atrMultiplier = 2.5);
    bool ConfigureSymbolStopLoss(string symbol, double defaultStopPoints, double atrMultiplier);
    bool ConfigureSymbolPartials(string symbol, bool usePartials, double &levels[], double &volumes[]);
 
@@ -236,7 +236,7 @@ void CRiskManager::UpdateAccountInfo()
 //+------------------------------------------------------------------+
 //| ✅ FUNÇÃO ORIGINAL MANTIDA: Adicionar símbolo                   |
 //+------------------------------------------------------------------+
-bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLotSize)
+bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLotSize, double atrMultiplier)
 {
    // Verificar se o símbolo já existe
    int index = FindSymbolIndex(symbol);
@@ -246,6 +246,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
       // Atualizar parâmetros existentes
       m_symbolParams[index].riskPercentage = riskPercentage;
       m_symbolParams[index].maxLotSize = maxLotSize;
+      m_symbolParams[index].atrMultiplier = atrMultiplier;
 
       if (m_logger != NULL)
       {
@@ -273,7 +274,7 @@ bool CRiskManager::AddSymbol(string symbol, double riskPercentage, double maxLot
    m_symbolParams[size].riskPercentage = riskPercentage;
    m_symbolParams[size].maxLotSize = maxLotSize;
    m_symbolParams[size].defaultStopPoints = 100; // Valor padrão
-   m_symbolParams[size].atrMultiplier = 2.0;     // Valor padrão
+   m_symbolParams[size].atrMultiplier = atrMultiplier;
    m_symbolParams[size].usePartials = false;
 
    // ✅ INICIALIZAR NOVOS CAMPOS PARA PARCIAIS UNIVERSAIS
@@ -1962,22 +1963,27 @@ OrderRequest CRiskManager::BuildRequest(string symbol, Signal &signal, MARKET_PH
 //+------------------------------------------------------------------+
 double CRiskManager::CalculateStopLoss(string symbol, ENUM_ORDER_TYPE orderType, double entryPrice, MARKET_PHASE phase)
 {
-   // Implementação original mantida
    int index = FindSymbolIndex(symbol);
    if (index < 0)
       return 0;
 
-   double stopPoints = m_symbolParams[index].defaultStopPoints;
+   SymbolRiskParams riskConfig = m_symbolParams[index];
    double point = SymbolInfoDouble(symbol, SYMBOL_POINT);
 
+   // Stop baseado no padrão definido
+   double patternStop = riskConfig.defaultStopPoints * point;
+
+   // Proteção usando ATR
+   double atr = CalculateATRValue(symbol, PERIOD_D1, 14);
+   double minStop = atr * riskConfig.atrMultiplier;
+
+   if (patternStop < minStop)
+      patternStop = minStop;
+
    if (orderType == ORDER_TYPE_BUY)
-   {
-      return entryPrice - (stopPoints * point);
-   }
+      return entryPrice - patternStop;
    else
-   {
-      return entryPrice + (stopPoints * point);
-   }
+      return entryPrice + patternStop;
 }
 
 double CRiskManager::CalculateTakeProfit(string symbol, ENUM_ORDER_TYPE orderType, double entryPrice, double stopLoss)
