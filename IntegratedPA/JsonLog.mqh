@@ -87,6 +87,7 @@ class CJSONLogger
 private:
    SessionLogData m_session;
    string m_logPath;
+   string m_logFile;
    CLogger *m_logger;
 
    // Gerar ID único para sessão
@@ -140,6 +141,7 @@ public:
    {
       m_logger = logger;
       m_logPath = "Logs/Sessions/";
+      m_logFile = "";
    }
 
    // Iniciar nova sessão
@@ -160,16 +162,18 @@ public:
       m_session.totalLoss = 0;
       m_session.maxDrawdown = 0;
 
-      // Criar arquivo JSON inicial
-      string filename = "cavalo.json";
-      // string filename = "cavalo.json";
-      int handle = FileOpen(filename, FILE_WRITE | FILE_TXT | FILE_ANSI);
+      // Criar arquivo JSON inicial no diretório configurado
+      if (!DirectoryIsExist(m_logPath))
+         DirectoryCreate(m_logPath);
+
+      m_logFile = m_logPath + m_session.sessionId + ".json";
+      int handle = FileOpen(m_logFile, FILE_WRITE | FILE_TXT | FILE_ANSI);
 
       if (handle == INVALID_HANDLE)
       {
          if (m_logger != NULL)
          {
-            m_logger.Error("Falha ao criar arquivo de sessão JSON: " + filename);
+            m_logger.Error("Falha ao criar arquivo de sessão JSON: " + m_logFile);
          }
          return false;
       }
@@ -424,8 +428,10 @@ private:
    // Atualizar arquivo JSON
    void UpdateSessionFile()
    {
-      string filename = "cavalo.json";
-      int handle = FileOpen(filename, FILE_WRITE | FILE_TXT | FILE_ANSI);
+      if (m_logFile == "")
+         return;
+
+      int handle = FileOpen(m_logFile, FILE_WRITE | FILE_TXT | FILE_ANSI);
 
       if (handle != INVALID_HANDLE)
       {
