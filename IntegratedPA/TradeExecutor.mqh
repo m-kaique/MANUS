@@ -502,6 +502,16 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
       if (result)
       {
          m_logger.Info(StringFormat("✅ POSIÇÃO #%d FECHADA COMPLETAMENTE", ticket));
+         if (m_jsonlog != NULL)
+         {
+            ulong deal = m_trade.ResultDeal();
+            double profit = 0.0;
+            if (deal > 0)
+               profit = HistoryDealGetDouble(deal, DEAL_PROFIT);
+
+            double closePrice = m_trade.ResultPrice();
+            m_jsonlog.CloseOrder(ticket, closePrice, profit, "CLOSE");
+         }
       }
       else
       {
@@ -1597,6 +1607,14 @@ void CTradeExecutor::ManageTrailingStops()
                   m_logger.Info(StringFormat("✅ TRAILING ATUALIZADO #%d: %.5f → %.5f (melhoria: %.1f pontos)",
                                              m_trailingConfigs[i].ticket, oldSL, newStopLoss, improvement));
                }
+
+               if (m_jsonlog != NULL)
+               {
+                  double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+                  double dist = MathAbs(newStopLoss - entry);
+                  string tType = EnumToString(m_trailingConfigs[i].trailingType);
+                  m_jsonlog.UpdateTrailing(m_trailingConfigs[i].ticket, dist, tType);
+               }
             }
             else
             {
@@ -2457,6 +2475,11 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
       {
          m_logger.Info(StringFormat("BREAKEVEN ACIONADO para #%d: SL movido para %.5f (entrada + %.1f pontos)",
                                     m_breakevenConfigs[configIndex].ticket, newStopLoss, m_breakevenConfigs[configIndex].breakevenOffset));
+      }
+
+      if (m_jsonlog != NULL)
+      {
+         m_jsonlog.UpdateBreakeven(m_breakevenConfigs[configIndex].ticket, newStopLoss);
       }
 
       // ✅ NOVO: Configurar trailing stop automaticamente após breakeven
@@ -3452,6 +3475,15 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
       else
       {
          m_logger.Info(StringFormat("Posição #%d fechada completamente", position_ticket));
+      }
+
+      if (m_jsonlog != NULL)
+      {
+         double partialProfit = 0.0;
+         if (result.deal > 0)
+            partialProfit = HistoryDealGetDouble(result.deal, DEAL_PROFIT);
+
+         m_jsonlog.UpdatePartial(position_ticket, partial_volume, partialProfit);
       }
    }
    else
