@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef MARKET_CONTEXT_MQH
+#define MARKET_CONTEXT_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property strict
@@ -1082,3 +1084,5 @@ int CMarketContext::CheckTrendDirection()
 
    return 0; // Sem tendência clara
 }
+
+#endif // MARKET_CONTEXT_MQH

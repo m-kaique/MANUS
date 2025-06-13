@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef VISUALPANEL_MQH
+#define VISUALPANEL_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
 #property version   "1.00"
@@ -458,3 +460,4 @@ void CVisualPanel::SetPosition(int x, int y) {
       Update();
    }
 }
+#endif // VISUALPANEL_MQH
