@@ -3,6 +3,8 @@
 //|                                                   ©2025, MANUS |
 //|                         Compatível com MetaEditor Build 4885 – 28 Feb 2025 (≥ 4600) |
 //+------------------------------------------------------------------+
+#ifndef CONSTANTS_MQH
+#define CONSTANTS_MQH
 #property copyright "©2025, MANUS"
 #property link      "https://www.mql5.com"
 #property version   "5.00"
@@ -251,3 +253,4 @@ input double MAX_VOLUME_PER_TRADE = 8.0;
 #define COLOR_LOSS                  clrRed
 #define COLOR_WARNING               clrOrange
 #define COLOR_INFO                  clrCyan
+#endif // CONSTANTS_MQH

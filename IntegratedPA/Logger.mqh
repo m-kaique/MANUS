@@ -406,4 +406,4 @@ void CLogger::SendAlert(string message, bool notifyTerminal = true, bool sendEma
    Info("ALERT: " + message);
 }
 
-#endif LOGGER_MQH
+#endif // LOGGER_MQH

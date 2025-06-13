@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef PERFORMANCE_TRACKER_MQH
+#define PERFORMANCE_TRACKER_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
 #property version   "1.00"
@@ -865,3 +867,4 @@ bool CPerformanceTracker::ShouldAdjustMinQuality(SETUP_QUALITY &recommendedQuali
    
    return false;
 }
+#endif // PERFORMANCE_TRACKER_MQH

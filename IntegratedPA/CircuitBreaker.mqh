@@ -1,4 +1,4 @@
-#ifndef CIRCUITBREAKER_MQH
+#ifndef CIRCUIT_BREAKER_MQH
 #define CIRCUIT_BREAKER_MQH
 //+------------------------------------------------------------------+
 //|                                               CircuitBreaker.mqh |
@@ -103,4 +103,4 @@ public:
    }
 };
 
-#endif 
+#endif // CIRCUIT_BREAKER_MQH

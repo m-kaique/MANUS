@@ -64,7 +64,7 @@ enum ASSET_TYPE
    ASSET_LARGE_LOT,     // Lotes grandes (ex: ações em lotes de 100)
    ASSET_UNKNOWN        // Tipo não determinado
 };
-#endif
+#endif // ASSET_TYPE_DEFINED
 
 //+------------------------------------------------------------------+
 //| Enumeração para Estratégias de Parciais                          |
@@ -79,7 +79,7 @@ enum PARTIAL_STRATEGY
    PARTIAL_STRATEGY_CONDITIONAL, // Usar parciais apenas se viável
    PARTIAL_STRATEGY_DISABLED     // Desabilitar parciais
 };
-#endif
+#endif // PARTIAL_STRATEGY_DEFINED
 
 //+------------------------------------------------------------------+
 //| ✅ SISTEMA DE PARCIAIS UNIVERSAL - Estruturas                   |

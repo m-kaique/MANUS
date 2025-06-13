@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef SETUPCLASSIFIER_MQH
+#define SETUPCLASSIFIER_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property version "1.00"
@@ -810,3 +812,5 @@ double CSetupClassifier::CalculateSpreadMultiple(string symbol, double currentSp
 
    return (avgSpread > 0) ? currentSpread / avgSpread : 1.0;
 }
+
+#endif // SETUPCLASSIFIER_MQH

@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef UTILS_MQH
+#define UTILS_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
 #property version   "1.00"
@@ -663,3 +665,5 @@ bool CheckRSIDivergence(string symbol, ENUM_TIMEFRAMES timeframe, int lookbackBa
    
    return false;
 }
+
+#endif // UTILS_MQH

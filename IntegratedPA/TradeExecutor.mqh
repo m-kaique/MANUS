@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef TRADEEXECUTOR_MQH
+#define TRADEEXECUTOR_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property version "1.00"
@@ -3676,3 +3678,5 @@ double CTradeExecutor::GetSessionMultiplier(string symbol)
 
    return 1.0; // Padrão
 }
+
+#endif // TRADEEXECUTOR_MQH

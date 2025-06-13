@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef SIGNALENGINE_MQH
+#define SIGNALENGINE_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property version "1.00"
@@ -510,3 +512,4 @@ Signal CSignalEngine::GenerateSpikeAndChannelSignal(string symbol, ENUM_TIMEFRAM
 
    return signal;
 }
+#endif // SIGNALENGINE_MQH

@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef JSONLOG_MQH
+#define JSONLOG_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link "https://www.mql5.com"
 #property version "1.00"
@@ -432,3 +434,5 @@ private:
       }
    }
 };
+
+#endif // JSONLOG_MQH

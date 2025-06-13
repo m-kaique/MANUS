@@ -3,6 +3,8 @@
 //|                                  Copyright 2025, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
+#ifndef INDICATORHANDLE_MQH
+#define INDICATORHANDLE_MQH
 #property copyright "Copyright 2025, MetaQuotes Ltd."
 #property link      "https://www.mql5.com"
 #property version   "1.00"
@@ -303,3 +305,4 @@ public:
       );
    }
 };
+#endif // INDICATORHANDLE_MQH
