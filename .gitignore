@@ -10,6 +10,7 @@
 *.lo
 *.o
 *.obj
+*.ex5
 
 # Precompiled Headers
 *.gch

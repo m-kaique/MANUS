@@ -268,6 +268,7 @@ bool CTradeExecutor::Initialize(CLogger *logger, CJSONLogger *jsonlog, CMarketCo
    return true;
 }
 
+// Versão aprimorada da função Execute com tratamento de retcode e prevenção de ordens duplicadas
 bool CTradeExecutor::Execute(OrderRequest &request)
 {
    // Circuit Breaker
@@ -299,7 +300,14 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       return false;
    }
 
-   // ✅ NOVA VALIDAÇÃO: Ajustar stops ANTES da execução
+   // Prevenir duplicidade de posições
+   if (PositionSelect(request.symbol) && PositionGetInteger(POSITION_MAGIC) == MAGIC_NUMBER)
+   {
+      m_logger.Warning("Já existe uma posição ativa para este símbolo com o mesmo Magic Number.");
+      return false;
+   }
+
+   // Ajustar stops antes da execução
    double adjustedEntry = request.price;
    double adjustedSL = request.stopLoss;
    double adjustedTP = request.takeProfit;
@@ -314,7 +322,6 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       return false;
    }
 
-   // Atualizar valores no request
    request.price = adjustedEntry;
    request.stopLoss = adjustedSL;
    request.takeProfit = adjustedTP;
@@ -327,7 +334,6 @@ bool CTradeExecutor::Execute(OrderRequest &request)
                               request.stopLoss,
                               request.takeProfit));
 
-   // Executar ordem com retry
    bool result = false;
    int retries = 0;
 
@@ -337,7 +343,6 @@ bool CTradeExecutor::Execute(OrderRequest &request)
       {
          m_logger.Warning(StringFormat("Tentativa %d de %d após erro: %d", retries + 1, m_maxRetries, m_lastError));
          Sleep(m_retryDelay);
-
          if (!ValidateAndAdjustStops(request.symbol, request.type, request.price, request.stopLoss, request.takeProfit))
          {
             m_logger.Error("Falha na re-validação dos stops");
@@ -347,85 +352,31 @@ bool CTradeExecutor::Execute(OrderRequest &request)
          }
       }
 
-      double executionPrice = request.price;
-      if (request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL)
-         executionPrice = 0;
+      double executionPrice = (request.type == ORDER_TYPE_BUY || request.type == ORDER_TYPE_SELL) ? 0 : request.price;
 
-      switch (request.type)
-      {
-      case ORDER_TYPE_BUY:
+      if (request.type == ORDER_TYPE_BUY)
          result = m_trade.Buy(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
-         break;
-      case ORDER_TYPE_SELL:
+      else if (request.type == ORDER_TYPE_SELL)
          result = m_trade.Sell(request.volume, request.symbol, executionPrice, request.stopLoss, request.takeProfit, request.comment);
-         break;
-      case ORDER_TYPE_BUY_LIMIT:
-         result = m_trade.BuyLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      case ORDER_TYPE_SELL_LIMIT:
-         result = m_trade.SellLimit(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      case ORDER_TYPE_BUY_STOP:
-         result = m_trade.BuyStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      case ORDER_TYPE_SELL_STOP:
-         result = m_trade.SellStop(request.volume, request.price, request.symbol, request.stopLoss, request.takeProfit, ORDER_TIME_GTC, 0, request.comment);
-         break;
-      default:
-         m_lastError = -3;
-         m_lastErrorDesc = "Tipo de ordem não suportado";
-         m_logger.Error(m_lastErrorDesc);
+
+      // Verificar retorno da operação
+      if (!result || m_trade.ResultRetcode() != TRADE_RETCODE_DONE)
+      {
+         m_lastError = m_trade.ResultRetcode();
+         m_lastErrorDesc = m_trade.ResultRetcodeDescription();
+         m_logger.Error(StringFormat("Erro ao executar ordem: %d - %s", m_lastError, m_lastErrorDesc));
          if (m_circuitBreaker != NULL)
-            m_circuitBreaker.RegisterError("Tipo de ordem não suportado");
-         return false;
+            m_circuitBreaker.RegisterError(m_lastErrorDesc);
+         result = false;
+         retries++;
       }
-
-      if (!result)
+      else
       {
-         m_lastError = (int)m_trade.ResultRetcode();
-         m_lastErrorDesc = "Erro na execução da ordem: " + IntegerToString(m_lastError);
-
-         m_logger.Error(StringFormat("%s - Retcode: %d, Comment: %s",
-                                     m_lastErrorDesc,
-                                     m_lastError,
-                                     m_trade.ResultRetcodeDescription()));
-
-         if (!IsRetryableError(m_lastError))
-         {
-            if (m_circuitBreaker != NULL)
-               m_circuitBreaker.RegisterError("Erro não recuperável: " + m_lastErrorDesc);
-            return false;
-         }
+         result = true;
       }
-
-      retries++;
    }
 
-   if (result)
-   {
-      ulong ticket = m_trade.ResultOrder();
-      m_logger.Info(StringFormat("Ordem executada com sucesso. Ticket: %d", ticket));
-
-      if (ticket > 0)
-      {
-         AutoConfigureBreakeven(ticket, request.symbol);
-         ConfigurePartialControl(ticket, request.symbol, request.price, request.volume);
-
-         m_logger.Info(StringFormat("Breakeven e controle de parciais configurados para #%d. Trailing será ativado após breakeven.", ticket));
-      }
-
-      if (m_circuitBreaker != NULL)
-         m_circuitBreaker.RegisterSuccess();
-
-      return true;
-   }
-   else
-   {
-      m_logger.Error(StringFormat("Falha na execução da ordem após %d tentativas. Último erro: %d", m_maxRetries, m_lastError));
-      if (m_circuitBreaker != NULL)
-         m_circuitBreaker.RegisterError("Falha definitiva após retries: " + IntegerToString(m_lastError));
-      return false;
-   }
+   return result;
 }
 
 //+------------------------------------------------------------------+
