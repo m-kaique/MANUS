@@ -276,22 +276,20 @@ void CPerformanceTracker::RegisterTradeOpen(ulong ticket, string symbol, string 
    int size = ArraySize(m_tradeHistory);
    ArrayResize(m_tradeHistory, size + 1);
    
-   // TradeHistory* trade = &m_tradeHistory[size];
-   TradeHistory trade = m_tradeHistory[size];
-
-   trade.ticket = ticket;
-   trade.symbol = symbol;
-   trade.strategy = strategy;
-   trade.quality = quality;
-   trade.confluenceFactors = confluenceFactors;
-   trade.openTime = TimeCurrent();
+   // Preencher diretamente a nova posição do array
+   m_tradeHistory[size].ticket = ticket;
+   m_tradeHistory[size].symbol = symbol;
+   m_tradeHistory[size].strategy = strategy;
+   m_tradeHistory[size].quality = quality;
+   m_tradeHistory[size].confluenceFactors = confluenceFactors;
+   m_tradeHistory[size].openTime = TimeCurrent();
    
    // Obter informações da posição
    if(PositionSelectByTicket(ticket)) {
-      trade.type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
-      trade.openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
-      trade.volume = PositionGetDouble(POSITION_VOLUME);
-      trade.comment = PositionGetString(POSITION_COMMENT);
+      m_tradeHistory[size].type = (ENUM_POSITION_TYPE)PositionGetInteger(POSITION_TYPE);
+      m_tradeHistory[size].openPrice = PositionGetDouble(POSITION_PRICE_OPEN);
+      m_tradeHistory[size].volume = PositionGetDouble(POSITION_VOLUME);
+      m_tradeHistory[size].comment = PositionGetString(POSITION_COMMENT);
    }
    
    // Atualizar estatísticas
@@ -331,10 +329,6 @@ void CPerformanceTracker::RegisterTradeClose(ulong ticket) {
       return;
    }
    
-   // TradeHistory* trade = &m_tradeHistory[index];
-   TradeHistory trade = m_tradeHistory[index];
-
-   
    // Obter informações do histórico de deals
    if(!HistorySelectByPosition(ticket)) {
       if(m_logger != NULL) {
@@ -358,34 +352,34 @@ void CPerformanceTracker::RegisterTradeClose(ulong ticket) {
          
          // Pegar preço de fechamento do último deal
          if(i == deals - 1) {
-            trade.closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
-            trade.closeTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+            m_tradeHistory[index].closePrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+            m_tradeHistory[index].closeTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
          }
       }
    }
-   
-   trade.profit = totalProfit;
-   trade.commission = totalCommission;
-   trade.swap = totalSwap;
+
+   m_tradeHistory[index].profit = totalProfit;
+   m_tradeHistory[index].commission = totalCommission;
+   m_tradeHistory[index].swap = totalSwap;
    
    // Calcular R:R realizado
    double risk = 0;
    double reward = 0;
    
-   if(trade.type == POSITION_TYPE_BUY) {
-      risk = trade.openPrice - PositionGetDouble(POSITION_SL);
-      reward = trade.closePrice - trade.openPrice;
+   if(m_tradeHistory[index].type == POSITION_TYPE_BUY) {
+      risk = m_tradeHistory[index].openPrice - PositionGetDouble(POSITION_SL);
+      reward = m_tradeHistory[index].closePrice - m_tradeHistory[index].openPrice;
    } else {
-      risk = PositionGetDouble(POSITION_SL) - trade.openPrice;
-      reward = trade.openPrice - trade.closePrice;
+      risk = PositionGetDouble(POSITION_SL) - m_tradeHistory[index].openPrice;
+      reward = m_tradeHistory[index].openPrice - m_tradeHistory[index].closePrice;
    }
-   
+
    if(risk > 0) {
-      trade.riskReward = reward / risk;
+      m_tradeHistory[index].riskReward = reward / risk;
    }
-   
+
    // Atualizar estatísticas
-   int qualityIndex = GetQualityIndex(trade.quality);
+   int qualityIndex = GetQualityIndex(m_tradeHistory[index].quality);
    if(qualityIndex >= 0) {
       if(totalProfit > 0) {
          m_globalStats[qualityIndex].winTrades++;
@@ -396,14 +390,14 @@ void CPerformanceTracker::RegisterTradeClose(ulong ticket) {
       }
       
       m_globalStats[qualityIndex].avgRiskReward = 
-         (m_globalStats[qualityIndex].avgRiskReward * (m_globalStats[qualityIndex].totalTrades - 1) + trade.riskReward) / 
+         (m_globalStats[qualityIndex].avgRiskReward * (m_globalStats[qualityIndex].totalTrades - 1) + m_tradeHistory[index].riskReward) /
          m_globalStats[qualityIndex].totalTrades;
       
       m_globalStats[qualityIndex].Calculate();
    }
    
    // Atualizar estatísticas por estratégia
-   int strategyIndex = FindStrategyIndex(trade.strategy);
+   int strategyIndex = FindStrategyIndex(m_tradeHistory[index].strategy);
    if(strategyIndex >= 0 && qualityIndex >= 0) {
       if(totalProfit > 0) {
          m_strategyStats[strategyIndex].qualityStats[qualityIndex].winTrades++;
@@ -421,8 +415,8 @@ void CPerformanceTracker::RegisterTradeClose(ulong ticket) {
    UpdateDrawdown();
    
    if(m_logger != NULL) {
-      m_logger.Info(StringFormat("PerformanceTracker: Trade fechado - Ticket: %d, Lucro: %.2f, R:R: %.2f", 
-                               ticket, totalProfit, trade.riskReward));
+      m_logger.Info(StringFormat("PerformanceTracker: Trade fechado - Ticket: %d, Lucro: %.2f, R:R: %.2f",
+                               ticket, totalProfit, m_tradeHistory[index].riskReward));
    }
 }
 
