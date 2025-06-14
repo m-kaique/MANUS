@@ -462,6 +462,8 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
 
    // Obter volume atual da posição
    double currentVolume = PositionGetDouble(POSITION_VOLUME);
+   double preClosePrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+   double preCloseProfit = PositionGetDouble(POSITION_PROFIT);
 
    // Determinar tipo de fechamento
    bool isFullClose = (volume <= 0 || volume >= currentVolume);
@@ -502,6 +504,10 @@ bool CTradeExecutor::ClosePosition(ulong ticket, double volume)
       if (result)
       {
          m_logger.Info(StringFormat("✅ POSIÇÃO #%d FECHADA COMPLETAMENTE", ticket));
+         if (m_jsonlog != NULL)
+         {
+            m_jsonlog.CloseOrder(ticket, preClosePrice, preCloseProfit, "CLOSE");
+         }
       }
       else
       {
@@ -1590,6 +1596,15 @@ void CTradeExecutor::ManageTrailingStops()
                m_trailingConfigs[i].lastStopLoss = newStopLoss;
                m_trailingConfigs[i].lastUpdateTime = TimeCurrent();
 
+               if (m_jsonlog != NULL)
+               {
+                  double price = PositionGetDouble(POSITION_PRICE_CURRENT);
+                  double dist = MathAbs(price - newStopLoss) / SymbolInfoDouble(m_trailingConfigs[i].symbol, SYMBOL_POINT);
+                  string ttype = (m_trailingConfigs[i].trailingType == TRAILING_FIXED) ? "FIXED" :
+                                 (m_trailingConfigs[i].trailingType == TRAILING_ATR) ? "ATR" : "MA";
+                  m_jsonlog.UpdateTrailing(m_trailingConfigs[i].ticket, dist, ttype);
+               }
+
                if (m_logger != NULL)
                {
                   double oldSL = PositionGetDouble(POSITION_SL);
@@ -2458,6 +2473,10 @@ bool CTradeExecutor::ExecuteBreakeven(int configIndex)
          m_logger.Info(StringFormat("BREAKEVEN ACIONADO para #%d: SL movido para %.5f (entrada + %.1f pontos)",
                                     m_breakevenConfigs[configIndex].ticket, newStopLoss, m_breakevenConfigs[configIndex].breakevenOffset));
       }
+
+      // ✅ Registrar no log JSON
+      if (m_jsonlog != NULL)
+         m_jsonlog.UpdateBreakeven(m_breakevenConfigs[configIndex].ticket, newStopLoss);
 
       // ✅ NOVO: Configurar trailing stop automaticamente após breakeven
       AutoConfigureTrailingStop(m_breakevenConfigs[configIndex].ticket, m_breakevenConfigs[configIndex].symbol);
@@ -3433,6 +3452,10 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
    // ✅ VALIDAR RESULTADO E VOLUME RESTANTE
    if (success)
    {
+      double partialProfit = 0.0;
+      if (HistoryDealSelect(result.deal))
+         partialProfit = HistoryDealGetDouble(result.deal, DEAL_PROFIT);
+
       // Verificar volume restante na posição
       if (PositionSelectByTicket(position_ticket))
       {
@@ -3453,6 +3476,9 @@ bool CTradeExecutor::ClosePartialPosition(ulong position_ticket, double partial_
       {
          m_logger.Info(StringFormat("Posição #%d fechada completamente", position_ticket));
       }
+
+      if (m_jsonlog != NULL)
+         m_jsonlog.UpdatePartial(position_ticket, partial_volume, partialProfit);
    }
    else
    {
