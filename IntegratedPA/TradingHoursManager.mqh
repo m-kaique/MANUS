@@ -87,8 +87,8 @@ public:
       int endMinutes      = m_endHour*60 + m_endMinute;
       int midStartMinutes = m_midStartHour*60 + m_midStartMinute;
       int midEndMinutes   = m_midEndHour*60 + m_midEndMinute;
-      int preMidBlock     = midStartMinutes - 3;
-      int preEndBlock     = endMinutes - 3;
+      int preMidBlock = midStartMinutes - 10;
+      int preEndBlock = endMinutes - 10;
 
       MqlDateTime ld;
       TimeToStruct(m_lastDay, ld);
@@ -99,7 +99,7 @@ public:
          m_lastDay      = now;
         }
 
-      if(minutes >= preEndBlock && minutes < endMinutes)
+      if(minutes >= preEndBlock && minutes <= endMinutes + 1)
         {
          if(!m_endShutdownDone)
            {
@@ -117,7 +117,7 @@ public:
          return;
         }
 
-      if(minutes >= preMidBlock && minutes < midStartMinutes)
+      if(minutes >= preMidBlock && minutes <= midStartMinutes + 1)
         {
          if(!m_midShutdownDone)
            {
