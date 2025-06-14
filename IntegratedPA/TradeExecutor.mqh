@@ -2773,7 +2773,7 @@ bool CTradeExecutor::ShouldTakePartialNowIntelligent(ulong ticket, double curren
    int configIndex = FindPartialConfigIndex(ticket);
    if (configIndex < 0)
    {
-      return false; // Sem configuração
+      return false; // Sem configuraçãof
    }
 
    if (!PositionSelectByTicket(ticket))

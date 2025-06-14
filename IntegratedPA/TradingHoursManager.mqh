@@ -98,7 +98,7 @@ public:
          m_endShutdownDone = false;
          m_lastDay      = now;
         }
-
+        
       if(minutes >= preEndBlock && minutes <= endMinutes + 1)
         {
          if(!m_endShutdownDone)
@@ -122,7 +122,7 @@ public:
          if(!m_midShutdownDone)
            {
             if(m_logger!=NULL)
-               m_logger.Info("Encerrando operações para intervalo de almoço");
+               m_logger.Info("Encerrando operações para intervalo de almoço" + (string)TimeCurrent());
             m_executor.CancelAllPendingOrders();
             m_executor.CloseAllPositions();
             m_midShutdownDone = true;

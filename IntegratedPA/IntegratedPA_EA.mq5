@@ -758,7 +758,7 @@ void OnTick()
       }
 
       g_lastBarTimes[i] = currentBarTime;
-      g_logger.Info("Nova barra detectada para " + symbol + " - Analisando novos sinais");
+      //g_logger.Info("Nova barra detectada para " + symbol + " - Analisando novos sinais");
 
       // Atualizar contexto de mercado
       if (!g_marketContext.UpdateSymbol(symbol))
